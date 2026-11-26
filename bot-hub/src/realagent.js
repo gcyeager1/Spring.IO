@@ -16,6 +16,7 @@ export const WAKE_CAP = 10; // per account per rolling hour
 export const KEEP_MS = 24 * 60_000 * 60; // keep finished jobs so repeat callbacks stay idempotent
 export const QUIET_TZ = "America/New_York";
 export const HANDOFF_CAP = 3; // max bot-to-bot handoffs per chain
+export const STALE_JOB_MS = 10 * 60_000; // an open job older than this no longer blocks a new wake
 export const AGENT_POST_CAP = 20; // direct posts per account per rolling hour
 export const DEFAULT_HANDOFF_TRIGGERS = ["asschub", "dummy", "claude"];
 
@@ -136,11 +137,30 @@ const isOpen = (j, now = nowMs()) => j.status === "open" && now - j.ts <= EXPIRE
 
 export const getJob = (id) => S().jobs[id];
 
-/** Open, unexpired job for this bot in this room, if any. */
+/**
+ * Open job for this bot in this room younger than STALE_JOB_MS, if any. Older open jobs stay open
+ * (late callbacks are still accepted until EXPIRE_MS) but no longer block a new wake.
+ */
 export function inFlight(botId, room) {
   prune();
   const now = nowMs();
+  return Object.values(S().jobs).find((j) => j.botId === botId && j.room === room && isOpen(j, now) && now - j.ts <= STALE_JOB_MS);
+}
+
+/** Open, unexpired job for this bot in this room regardless of age (for diagnostics). */
+export function staleInFlight(botId, room) {
+  const now = nowMs();
   return Object.values(S().jobs).find((j) => j.botId === botId && j.room === room && isOpen(j, now));
+}
+
+/** Collapse whitespace, redact bearer tokens and long base64/hex-looking strings, cap length. */
+export function sanitizeBody(raw, max = 200) {
+  const s = String(raw ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/Bearer\s+\S+/gi, "[redacted]")
+    .replace(/[A-Za-z0-9+/_-]{32,}={0,2}/g, "[redacted]");
+  return s.length > max ? s.slice(0, max) : s;
 }
 
 export function wakesInWindow(account) {
@@ -222,8 +242,12 @@ export function buildPayload(job, bot, text, visible) {
   };
 }
 
-/** One attempt, no retry. Resolves { ok } or { ok:false, reason } (never throws, never echoes the key). */
+/**
+ * One attempt, no retry. Resolves { ok, status?, reason?, body?, ms } (never throws, never echoes the key).
+ * Any 2xx counts as success. For non-2xx, body is a sanitized snippet of the response.
+ */
 export async function postWebhook(hook, payload) {
+  const t0 = Date.now();
   try {
     const res = await fetch(hook.url, {
       method: "POST",
@@ -232,9 +256,14 @@ export async function postWebhook(hook, payload) {
       redirect: "manual",
       signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
     });
-    res.body?.cancel?.().catch(() => {});
-    return res.status === 200 ? { ok: true } : { ok: false, reason: `HTTP ${res.status}` };
+    if (res.status >= 200 && res.status < 300) {
+      res.body?.cancel?.().catch(() => {});
+      return { ok: true, status: res.status, ms: Date.now() - t0 };
+    }
+    let body = "";
+    try { body = sanitizeBody((await res.text()).slice(0, 2000)); } catch {}
+    return { ok: false, status: res.status, reason: `HTTP ${res.status}`, body, ms: Date.now() - t0 };
   } catch (e) {
-    return { ok: false, reason: e?.name === "TimeoutError" ? "timed out after 8s" : "could not connect" };
+    return { ok: false, reason: e?.name === "TimeoutError" ? "timed out after 8s" : "could not connect", ms: Date.now() - t0 };
   }
 }

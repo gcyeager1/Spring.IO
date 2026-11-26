@@ -18,7 +18,7 @@ import { savePlanUsage, getPlanUsage } from "./planusage-store.js";
 import { getClaudeUsage, recordClaudeUsage, refreshClaudeUsageNow, startClaudeUsageProbe, claudeUsageLastRunAt, claudeUsageRunning } from "./claude-usage.js";
 import * as ra from "./realagent.js";
 import { ensureTeamBrief, readTeamBrief, saveTeamBrief } from "./team-brief.js";
-import { bridgeView, saveWebhook, clearWebhook, isBridgeBot, BRIDGE_BOTS, validateWebhookUrl } from "./bridge-store.js";
+import { bridgeView, sourceOf as bridgeSource, urlLabel, saveWebhook, clearWebhook, isBridgeBot, BRIDGE_BOTS, validateWebhookUrl } from "./bridge-store.js";
 import { replyTokenMeta, revealGarrettReplyToken, revealLifteasyReplyToken, regenerateGarrettReplyToken, replyRole } from "./reply-tokens.js";
 
 const cfg = loadConfig();
@@ -154,26 +154,43 @@ function expireJobs() {
  * Wake one real bot if the guards allow it (quiet hours, in-flight, hourly cap); otherwise post a
  * short note. Returns true when a webhook was fired.
  */
+const short = (id) => String(id ?? "").slice(0, 8);
+function wakeLog(bot, room, chainId, hop, result, reason) {
+  const src = typeof bot === "string" ? bot : bot.id;
+  console.log(`wake: bot=${src} room=${room} chain=${short(chainId)} hop=${hop} source=${bridgeSource(src)} result=${result} reason=${reason}`);
+}
 function wakeOne(bot, room, text, { chainId, hop, speaker }) {
   const hook = ra.webhookFor(bot.id);
+  if (!hook) {
+    wakeLog(bot, room, chainId, hop, "skip", "no-webhook");
+    return false;
+  }
   if (!ra.withinHours()) {
+    wakeLog(bot, room, chainId, hop, "skip", "quiet-hours");
     addNote(room, `Real bots are offline until 7 AM Eastern (they only run 7 AM-9 PM). ${bot.name} was not woken.`);
     return false;
   }
   if (ra.inFlight(bot.id, room)) {
+    wakeLog(bot, room, chainId, hop, "skip", "in-flight");
     addNote(room, `${bot.name} is still working on the previous request in this chat - wait for it before sending another.`);
     return false;
   }
   if (ra.wakesInWindow(bot.account) >= ra.WAKE_CAP) {
+    wakeLog(bot, room, chainId, hop, "skip", "hourly-cap");
     addNote(room, `Wake limit reached for ${cfg.accountsById.get(bot.account)?.name ?? bot.account} (${ra.WAKE_CAP} per hour). ${bot.name} was not woken.`);
     return false;
   }
+  const old = ra.staleInFlight(bot.id, room);
+  if (old) console.log(`wake: bot=${bot.id} room=${room} older job ${short(old.id)} (${Math.round((ra.nowMs() - old.ts) / 60000)} min) no longer blocks; late callbacks still accepted`);
   const job = ra.createJob({ id: randomUUID(), botId: bot.id, room, account: bot.account, chainId, hop, speaker });
   ra.markChainWoken(chainId, bot.id);
   const payload = ra.buildPayload(job, bot, text, getChat(room).filter((m) => !m.hidden));
   scheduleJob(job);
   broadcast("typing", { room, botId: bot.id, name: bot.name });
+  wakeLog(bot, room, chainId, hop, "sent", "ok");
   ra.postWebhook(hook, payload).then((r) => {
+    const status = r.status ?? r.reason;
+    console.log(`wake: result bot=${bot.id} job=${short(job.id)} status=${status} ms=${r.ms}` + (r.ok || !r.body ? "" : ` body="${r.body}"`));
     if (r.ok) return;
     for (const x of timers.get(job.id) ?? []) clearTimeout(x);
     timers.delete(job.id);
@@ -192,14 +209,20 @@ function wakeOne(bot, room, text, { chainId, hop, speaker }) {
 function wakeRealAgents(room, text) {
   const chainId = ra.startChain(randomUUID());
   const real = cfg.bots.filter((b) => ra.isRealAgent(b));
-  if (!real.length) return chainId;
+  if (!real.length) {
+    if (text) console.log(`wake: human room=${room} mentions=${[...ra.parseMentions(text, cfg.bots).ids].join(",") || "none"} real=none`);
+    return chainId;
+  }
   let targets = [];
   if (isDirect(room)) {
+    console.log(`wake: human room=${room} mentions=direct real=${text && botsById.get(room.slice(3)) && ra.isRealAgent(botsById.get(room.slice(3))) ? room.slice(3) : "none"}`);
     const b = botsById.get(room.slice(3));
     if (b && ra.isRealAgent(b) && text) targets = [b];
   } else if (text) {
     const m = ra.parseMentions(text, cfg.bots);
     targets = real.filter((b) => m.ids.has(b.id));
+    console.log(`wake: human room=${room} mentions=${[...m.ids].join(",") || "none"} real=${targets.map((b) => b.id).join(",") || "none"}`);
+    for (const id of m.ids) if (isBridgeBot(id) && !targets.some((b) => b.id === id)) wakeLog(id, room, chainId, 0, "skip", "no-webhook");
     for (const amb of m.ambiguous) {
       if (amb.ids.some((id) => botsById.has(id) && ra.isRealAgent(botsById.get(id)))) {
         const opts = amb.ids.map((id) => `@${id}`).join(" or ");
@@ -217,12 +240,24 @@ function wakeRealAgents(room, text) {
  * Guards: never itself, each bot at most once per chain, at most HANDOFF_CAP hops.
  */
 function handoff(room, fromBot, text, chainId, fromHop) {
-  if (!cfg.handoffTriggers.includes(fromBot.id) || typeof text !== "string") return;
+  if (typeof text !== "string") return;
   const m = ra.parseMentions(text, cfg.bots);
-  const targets = cfg.bots.filter((b) => m.ids.has(b.id) && b.id !== fromBot.id && ra.isRealAgent(b) && !ra.chainWoken(chainId, b.id));
-  if (!targets.length) return;
   const hop = fromHop + 1;
+  if (!cfg.handoffTriggers.includes(fromBot.id)) {
+    for (const id of m.ids) if (isBridgeBot(id)) wakeLog(id, room, chainId, hop, "skip", "not-trigger");
+    return;
+  }
+  const targets = [];
+  for (const b of cfg.bots) {
+    if (!m.ids.has(b.id)) continue;
+    if (b.id === fromBot.id) wakeLog(b, room, chainId, hop, "skip", "self");
+    else if (!ra.isRealAgent(b)) { if (isBridgeBot(b.id)) wakeLog(b, room, chainId, hop, "skip", "no-webhook"); }
+    else if (ra.chainWoken(chainId, b.id)) wakeLog(b, room, chainId, hop, "skip", "already-in-chain");
+    else targets.push(b);
+  }
+  if (!targets.length) return;
   if (hop > ra.HANDOFF_CAP) {
+    for (const b of targets) wakeLog(b, room, chainId, hop, "skip", "cap-reached");
     if (ra.claimCapNote(chainId)) addNote(room, `Handoff limit reached (${ra.HANDOFF_CAP}). Bots are waiting for Garrett.`);
     return;
   }
@@ -734,6 +769,7 @@ server.listen(PORT, HOST, () => {
   console.log(`Bot Hub running at http://${shown}:${PORT}`);
   console.log(`Login: ${getAdmin() ? `admin ${getAdmin().source === "env" ? "from env" : "from data dir"}` : "NO ADMIN YET - open /setup to create one"}`);
   console.log(`Data: ${dataDir()}`);
+  for (const b of bridgeView()) console.log(`bridge: ${b.id} source=${b.source} host=${b.source === "none" ? "-" : urlLabel(b.url).split("/")[0]}`);
   console.log(`Config: ${path.relative(ROOT, cfg.file)}${isMock() ? "  (MOCK mode - no API calls)" : ""}`);
   for (const a of cfg.accounts) {
     const problem = accountProblem(a);
