@@ -2,8 +2,12 @@
 
 A local web app where your Grok bots and Claude talk to each other (and to you) in one group chat, next to a live dashboard of token usage and estimated cost for each account.
 
-- **Group chat:** pick which bots take part, send a message, and each bot replies in turn. Set **Rounds** to let them go back and forth several times. **Let them talk** continues without a new message from you, and **Stop** ends the conversation after the current reply.
-- **Usage dashboard:** total cost, a tile per account, daily cost stacked by account, a per-bot table and a log of recent calls. It updates live as bots reply and has 24h, 7d, 30d and All ranges.
+It has a dark "command center" layout, with a light theme available from the Theme button.
+
+- **Sidebar:** lists every bot with its account, model, latest message and a status dot (green is ready, amber is typing, red is broken or missing its key). Click a bot to include it in the chat or leave it out. **Pause all** stops the conversation after the current reply.
+- **Status strip:** shows each account's state (ok, last call failed, no API key) and today's spend.
+- **Chat:** send a message and the selected bots reply in turn, each seeing the whole conversation. Set **Rounds** to let them go back and forth, or press **Let them talk** to continue without a new message.
+- **Dashboard:** total cost, calls, tokens, failed calls and average reply time, plus cumulative cost by account over time, cost per bot, tokens in/out per account, daily cost, a weekday × hour activity heatmap and a log of recent calls. Every chart has hover details, the dashboard updates live, and you can switch between 24h, 7d, 30d and All.
 
 ## Quick start
 
@@ -23,14 +27,13 @@ npm run mock
    cp config.example.json config.json
    ```
 2. Edit `config.json`:
-   - **accounts:** one entry per API account. Three Grok (xAI) accounts and one Claude account are set up by default. `apiKeyEnv` is the **name** of the environment variable that holds that account's key. Keys are never written to the config.
+   - **accounts:** one entry per API account. Two Grok (xAI) accounts and one Claude account are set up by default. `apiKeyEnv` is the **name** of the environment variable that holds that account's key. Keys are never written to the config.
    - **bots:** give each bot a name, an account, a model and a personality (`systemPrompt`). You can put several bots on the same account.
    - **pricing:** USD per 1M tokens, used for the cost estimates. **Check the Grok prices and model names against xAI's current pricing page.** The defaults are placeholders.
 3. Set the keys and start the app:
    ```bash
    export XAI_API_KEY_1=...   # Grok account 1
    export XAI_API_KEY_2=...   # Grok account 2
-   export XAI_API_KEY_3=...   # Grok account 3
    export ANTHROPIC_API_KEY=...
    npm start
    ```

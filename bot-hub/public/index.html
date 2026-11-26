@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,75 +7,112 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <header class="topbar">
-    <h1>Bot Hub</h1>
-    <span id="mode-badge" class="badge" hidden>Mock mode</span>
-    <span id="status" class="status" aria-live="polite"></span>
-  </header>
+<div class="app">
+  <!-- ================= Sidebar ================= -->
+  <aside class="sidebar" aria-label="Bots and navigation">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">◆</span>
+      <span>Bot Hub</span>
+      <span id="mode-badge" class="badge" hidden>mock</span>
+    </div>
 
-  <main class="layout">
-    <!-- ================= Chat ================= -->
-    <section class="panel chat" aria-label="Group chat">
-      <div class="panel-head">
-        <h2>Group chat</h2>
-        <button id="clear-btn" class="ghost" type="button">Clear chat</button>
+    <nav class="nav" aria-label="Views">
+      <button type="button" class="nav-item on" data-view="chat">Chat</button>
+      <button type="button" class="nav-item" data-view="dash">Dashboard</button>
+    </nav>
+
+    <div class="side-head">
+      <span>Bots</span>
+      <span class="side-hint">tap to include</span>
+    </div>
+    <ul id="bot-list" class="bot-list"></ul>
+
+    <div class="side-foot">
+      <button id="stop-btn" type="button" class="pause" disabled>■ Pause all</button>
+      <button id="theme-btn" type="button" class="ghost small" aria-label="Toggle light or dark theme">◐ Theme</button>
+    </div>
+  </aside>
+
+  <!-- ================= Main ================= -->
+  <div class="main">
+    <header class="statusbar" aria-label="Account status">
+      <div id="pills" class="pills"></div>
+      <div class="status-right">
+        <span id="today" class="today"></span>
+        <span id="status" class="status" aria-live="polite"></span>
       </div>
+    </header>
 
-      <fieldset class="participants">
-        <legend>Who's talking</legend>
-        <div id="bot-list" class="bot-list"></div>
-      </fieldset>
-
+    <!-- Chat view -->
+    <section id="view-chat" class="view chat-view" aria-label="Group chat">
+      <div class="view-head">
+        <h1>Group chat <span id="who" class="sub"></span></h1>
+        <button id="clear-btn" class="ghost small" type="button">Clear chat</button>
+      </div>
       <ol id="messages" class="messages" aria-live="polite"></ol>
       <div id="typing" class="typing" hidden></div>
-
-      <form id="composer" class="composer">
-        <textarea id="input" rows="2" placeholder="Say something to the group… (Enter to send, Shift+Enter for a new line)"></textarea>
-        <div class="composer-row">
-          <label class="rounds">Rounds
-            <input id="rounds" type="number" min="1" max="10" value="1" />
-          </label>
-          <span class="hint">Each round, every selected bot replies once, in order.</span>
-          <button id="continue-btn" class="ghost" type="button" title="Let the bots keep talking without a new message">Let them talk</button>
-          <button id="stop-btn" class="ghost danger" type="button" hidden>Stop</button>
-          <button id="send-btn" type="submit">Send</button>
-        </div>
-      </form>
     </section>
 
-    <!-- ================= Dashboard ================= -->
-    <section class="panel dash" aria-label="Usage dashboard">
-      <div class="panel-head">
-        <h2>Usage</h2>
+    <!-- Dashboard view -->
+    <section id="view-dash" class="view dash-view" aria-label="Usage dashboard" hidden>
+      <div class="view-head">
+        <h1>Usage</h1>
         <div class="seg" role="radiogroup" aria-label="Time range">
           <button type="button" data-days="1" role="radio">24h</button>
-          <button type="button" data-days="7" role="radio" aria-checked="true" class="on">7d</button>
+          <button type="button" data-days="7" role="radio">7d</button>
           <button type="button" data-days="30" role="radio">30d</button>
           <button type="button" data-days="all" role="radio">All</button>
         </div>
       </div>
 
-      <div id="total" class="hero"></div>
-      <div id="account-tiles" class="tiles"></div>
+      <div id="kpis" class="kpis"></div>
 
-      <figure class="chart-card">
-        <figcaption>
-          <span class="chart-title">Daily cost by account</span>
-          <span id="legend" class="legend"></span>
-        </figcaption>
-        <div id="chart" class="chart"></div>
-        <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
-      </figure>
+      <div class="grid">
+        <figure class="card span-2">
+          <figcaption><span class="card-title">Cumulative cost by account</span><span class="legend" data-legend="accounts"></span></figcaption>
+          <div id="chart-line" class="chart"></div>
+        </figure>
 
-      <h3>By bot</h3>
-      <div class="table-wrap"><table id="bot-table"></table></div>
+        <figure class="card">
+          <figcaption><span class="card-title">Cost by bot</span></figcaption>
+          <div id="chart-bots" class="chart"></div>
+        </figure>
 
-      <h3>Recent calls</h3>
-      <div class="table-wrap"><table id="recent-table"></table></div>
-      <p class="footnote">Costs are estimates from token counts and the per-account prices in your config. They only include calls made through Bot Hub.</p>
+        <figure class="card">
+          <figcaption><span class="card-title">Tokens by account</span><span id="legend-tokens" class="legend"></span></figcaption>
+          <div id="chart-tokens" class="chart"></div>
+        </figure>
+
+        <figure class="card">
+          <figcaption><span class="card-title">Daily cost</span><span class="legend" data-legend="accounts"></span></figcaption>
+          <div id="chart-daily" class="chart"></div>
+        </figure>
+
+        <figure class="card">
+          <figcaption><span class="card-title">When bots are busy</span><span class="legend">calls per hour, your time</span></figcaption>
+          <div id="chart-heat" class="chart"></div>
+        </figure>
+
+        <figure class="card span-2">
+          <figcaption><span class="card-title">Recent calls</span></figcaption>
+          <div class="table-wrap"><table id="recent-table"></table></div>
+        </figure>
+      </div>
+      <p class="footnote">Costs are estimates from token counts and the prices in your config, and only include calls made through Bot Hub.</p>
     </section>
-  </main>
 
-  <script type="module" src="/app.js"></script>
+    <!-- Composer: always visible, like a command bar -->
+    <form id="composer" class="composer">
+      <textarea id="input" rows="1" placeholder="Message the group… (Enter to send, Shift+Enter for a new line)"></textarea>
+      <label class="rounds" title="Each round, every selected bot replies once">Rounds
+        <input id="rounds" type="number" min="1" max="10" value="1" />
+      </label>
+      <button id="continue-btn" class="ghost" type="button" title="Let the bots keep talking without a new message">Let them talk</button>
+      <button id="send-btn" type="submit" aria-label="Send">↑</button>
+    </form>
+  </div>
+</div>
+<div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+<script type="module" src="/app.js"></script>
 </body>
 </html>

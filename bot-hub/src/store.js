@@ -69,5 +69,30 @@ export function summarizeUsage(sinceMs, accounts, bots) {
     (byDay[day][u.account] ??= blank()), add(byDay[day][u.account], u);
     add(total, u);
   }
-  return { since: sinceMs, total, byAccount, byBot, byDay, recent: rows.slice(-25).reverse() };
+  const latencies = rows.filter((u) => u.ok && u.latencyMs).map((u) => u.latencyMs);
+  total.avgLatencyMs = latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0;
+  // Compact per-call points for client-side charts (time series, heatmap), newest 20k.
+  const points = rows.slice(-20000).map((u) => [
+    u.ts,
+    u.account,
+    u.bot,
+    u.cost ?? 0,
+    (u.input ?? 0) + (u.cachedInput ?? 0) + (u.cacheWrite ?? 0),
+    u.output ?? 0,
+    u.ok ? 1 : 0,
+  ]);
+  // Latest call per account, regardless of range, for the status strip.
+  const lastByAccount = {};
+  for (const u of usage) lastByAccount[u.account] = { ts: u.ts, ok: u.ok, error: u.error };
+  return {
+    since: sinceMs,
+    now: Date.now(),
+    total,
+    byAccount,
+    byBot,
+    byDay,
+    points,
+    lastByAccount,
+    recent: rows.slice(-25).reverse(),
+  };
 }
