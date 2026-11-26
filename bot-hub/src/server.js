@@ -1,6 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { garrettKeyMeta, revealGarrettKey, regenerateGarrettKey, matchesGarrettKey } from "./ingest-keys.js";
 import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import {
   ROOT, dataDir, loadConfig, publicConfig, isMock, isPlan, accountProblem, claudeCodeVersion,
@@ -170,12 +171,17 @@ const STATIC = {
 // Bearer token for the plan-usage ingest. Constant-time compare on equal-length digests;
 // an unset env var means every attempt fails.
 const sha = (v) => createHash("sha256").update(String(v)).digest();
-function ingestAuthorized(req) {
-  const expected = process.env.BOTHUB_INGEST_TOKEN;
+// Returns "master" (env token: any account), "garrett" (garrett-only key) or null.
+// Both digests are always compared so timing doesn't reveal which token matched.
+function ingestRole(req) {
+  const master = process.env.BOTHUB_INGEST_TOKEN;
   const m = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ""));
-  const ok = timingSafeEqual(sha(m?.[1] ?? ""), sha(expected ?? ""));
-  return Boolean(expected) && Boolean(m) && ok;
+  const presented = m?.[1] ?? "";
+  const isMaster = timingSafeEqual(sha(presented), sha(master ?? "")) && Boolean(master) && Boolean(m);
+  const isGarrett = matchesGarrettKey(presented) && Boolean(m);
+  return isMaster ? "master" : isGarrett ? "garrett" : null;
 }
+const ingestAuthorized = (req) => ingestRole(req) === "master";
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
@@ -202,9 +208,11 @@ const server = http.createServer(async (req, res) => {
 
     // Grok plan-usage ingest: bearer token instead of a session cookie.
     if (url.pathname === "/api/plan-usage" && req.method === "POST") {
-      if (!ingestAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+      const role = ingestRole(req);
+      if (!role) return json(res, 401, { error: "Unauthorized" });
       let body;
       try { body = await readBody(req); } catch { return json(res, 400, { error: "Invalid JSON" }); }
+      if (role === "garrett" && body?.account !== "garrett") return json(res, 403, { error: "Key not valid for this account" });
       const v = validateReport(body);
       if (v.error) return json(res, 400, { error: v.error });
       savePlanUsage(v.report);
@@ -264,6 +272,22 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname.startsWith("/api/")) return json(res, 401, { error: "Not signed in" });
       res.writeHead(302, { Location: setupOpen() ? "/setup" : "/login" });
       return void res.end();
+    }
+
+    // Usage feed keys (session only; the token is never in metadata, config or logs).
+    if (url.pathname === "/api/ingest-keys" && req.method === "GET") {
+      return json(res, 200, { garrett: garrettKeyMeta() });
+    }
+    if (url.pathname === "/api/ingest-keys/garrett/reveal" && req.method === "POST") {
+      console.log("garrett ingest token revealed");
+      res.setHeader("Cache-Control", "no-store");
+      return json(res, 200, { token: revealGarrettKey(), ...garrettKeyMeta() });
+    }
+    if (url.pathname === "/api/ingest-keys/garrett/regenerate" && req.method === "POST") {
+      const token = regenerateGarrettKey();
+      console.log("garrett ingest token regenerated");
+      res.setHeader("Cache-Control", "no-store");
+      return json(res, 200, { token, ...garrettKeyMeta() });
     }
 
     if (req.method === "GET" && STATIC[url.pathname]) {
