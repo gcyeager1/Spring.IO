@@ -139,13 +139,13 @@ test("no chaining and no wake without a mention", async () => {
     // so inject via a free bot whose reply we can't control; verify the rule at the parser level too).
     await until(async () => (await msgs(s, h)).some((m) => m.speaker === "Nova"));
     assert.equal(hits.length, 0);
-    // Only the human speaker can wake: a callback message that mentions @Asschub does not.
-    await wake(s, h, "hi @Dummy", "group", ["nova"]);
+    // Only allowed handoff bots (asschub, dummy, claude) can wake others: addy's reply mentioning @Asschub does not.
+    await wake(s, h, "hi @Addy", "group", ["nova"]);
     assert.equal(hits.length, 1);
-    const r = await reply(s, { job_id: hits[0].body.job_id, bot_id: "dummy", text: "psst @Asschub wake up" });
+    const r = await reply(s, { job_id: hits[0].body.job_id, bot_id: "addy", text: "psst @Asschub wake up" });
     assert.equal(r.status, 200);
     await sleep(300);
-    assert.equal(hits.length, 1, "a bot's reply mentioning another bot must not POST");
+    assert.equal(hits.length, 1, "a non-allowed bot's reply mentioning another bot must not POST");
   });
 });
 

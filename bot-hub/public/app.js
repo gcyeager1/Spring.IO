@@ -297,7 +297,8 @@ async function loadBridge() {
   const msg = $("#bridge-msg");
   msg.textContent = "";
   try {
-    const { bots } = await api("/api/bridge");
+    const { bots, handoffCap, handoffNames } = await api("/api/bridge");
+    $("#bridge-handoff").innerHTML = `Bot-to-bot handoffs: max ${escHtml(handoffCap)} per chain<br>Can hand off: ${escHtml((handoffNames ?? []).join(", "))}`;
     $("#bridge-list").innerHTML = BRIDGE_GROUPS.map(([acct, title]) => `
       <figure class="card">
         <figcaption><span class="card-title">${escHtml(title)}</span></figcaption>

@@ -10,6 +10,7 @@ const EMAIL = "admin@example.com";
 const PASSWORD = "a-long-test-password";
 const RULE =
   "BOT HUB RULE: Use minimal usage here. Answer in 1-3 short sentences at the lowest effort. No tools, research, or long reasoning unless Garrett explicitly asks. Real work goes to your main chat, not the hub.";
+const HANDOFF = "Only Asschub, Dummy and Claude can hand off by @mentioning a bot (max 3 handoffs per chain, then wait for Garrett).";
 const env = { BOTHUB_ADMIN_EMAIL: EMAIL, BOTHUB_ADMIN_PASSWORD_HASH: hashPassword(PASSWORD) };
 
 // Module under test reads DATA_DIR at call time, so point it at a temp dir per test.
@@ -28,8 +29,9 @@ test("missing file is seeded with the rule as line 1, mode 0600", () =>
     const f = path.join(dir, "team-brief.txt");
     const lines = fs.readFileSync(f, "utf8").split("\n");
     assert.equal(lines[0], RULE);
-    assert.equal(lines[1], "");
-    assert.ok(lines[2].length > 0);
+    assert.equal(lines[1], HANDOFF);
+    assert.equal(lines[2], "");
+    assert.ok(lines[3].length > 0);
     assert.equal(fs.statSync(f).mode & 0o777, 0o600);
   }));
 
@@ -39,13 +41,13 @@ test("existing file without the rule gets it prepended, rest preserved", () =>
     const old = "Roles:\n- Dummy: CRM\n\nPriority: leads";
     fs.writeFileSync(f, old);
     tb.ensureTeamBrief();
-    assert.equal(fs.readFileSync(f, "utf8"), `${RULE}\n${old}`);
+    assert.equal(fs.readFileSync(f, "utf8"), `${RULE}\n${HANDOFF}\n${old}`);
   }));
 
 test("existing file already starting with the rule is not duplicated", () =>
   withDir((dir, tb) => {
     const f = path.join(dir, "team-brief.txt");
-    const cur = `${RULE}\n\nMy notes\n`;
+    const cur = `${RULE}\n${HANDOFF}\n\nMy notes\n`;
     fs.writeFileSync(f, cur);
     tb.ensureTeamBrief();
     tb.ensureTeamBrief();
@@ -59,7 +61,7 @@ test("buildPayload includes team_brief with the rule first, read fresh", () =>
     const p = buildPayload(job, { id: "asschub" }, "hi", []);
     assert.equal(p.team_brief.split("\n")[0], RULE);
     tb.saveTeamBrief("Fresh note");
-    assert.equal(buildPayload(job, { id: "asschub" }, "hi", []).team_brief, `${RULE}\nFresh note`);
+    assert.equal(buildPayload(job, { id: "asschub" }, "hi", []).team_brief, `${RULE}\n${HANDOFF}\nFresh note`);
   }));
 
 test("GET/PUT /api/team-brief: 401 signed out; PUT keeps the rule; GET reflects", async () => {
@@ -76,9 +78,9 @@ test("GET/PUT /api/team-brief: 401 signed out; PUT keeps the rule; GET reflects"
 
     const put = await fetch(s.base + "/api/team-brief", { method: "PUT", headers: { ...h, "Content-Type": "application/json" }, body: JSON.stringify({ text: "Only my notes" }) });
     assert.equal(put.status, 200);
-    assert.equal((await put.json()).text, `${RULE}\nOnly my notes`);
+    assert.equal((await put.json()).text, `${RULE}\n${HANDOFF}\nOnly my notes`);
     const got = await (await fetch(s.base + "/api/team-brief", { headers: h })).json();
-    assert.equal(got.text, `${RULE}\nOnly my notes`);
+    assert.equal(got.text, `${RULE}\n${HANDOFF}\nOnly my notes`);
     assert.equal(fs.readFileSync(path.join(s.dataDir, "team-brief.txt"), "utf8"), got.text);
     assert.ok(!s.output().includes("Only my notes"), "brief body must not be logged");
   } finally { await s.stop(); }

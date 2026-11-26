@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isRealAgent } from "./realagent.js";
+import { isRealAgent, DEFAULT_HANDOFF_TRIGGERS } from "./realagent.js";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -20,8 +20,22 @@ export function loadConfig() {
       throw new Error(`Bot "${bot.id}" refers to unknown account "${bot.account}" in ${path.basename(file)}`);
     }
   }
-  return { ...cfg, file, accountsById: accounts };
+  return { ...cfg, file, accountsById: accounts, handoffTriggers: handoffTriggers(cfg) };
 }
+
+/** Bot ids allowed to hand off by @mention: env (comma-separated) > config.json > default. */
+export function handoffTriggers(cfg) {
+  const list = (v) => (Array.isArray(v) ? v : String(v ?? "").split(","))
+    .map((x) => String(x).trim()).filter(Boolean);
+  const env = list(process.env.BOTHUB_HANDOFF_TRIGGERS);
+  if (env.length) return env;
+  const fromCfg = list(cfg.handoffTriggers);
+  if (fromCfg.length) return fromCfg;
+  // The hub's own Claude bot is whichever bot runs on the Claude Code account.
+  const claude = cfg.bots.find((b) => usesPlanAccount(cfg, b))?.id ?? "claude";
+  return DEFAULT_HANDOFF_TRIGGERS.map((id) => (id === "claude" ? claude : id));
+}
+const usesPlanAccount = (cfg, bot) => cfg.accounts.some((a) => a.id === bot.account && isPlan(a));
 
 /** Accounts paid for by a subscription (Claude Code on your plan) cost nothing per call. */
 export const isPlan = (account) => account.provider === "claude-code";

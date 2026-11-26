@@ -15,6 +15,8 @@ export const WAKE_WINDOW_MS = 60 * 60_000;
 export const WAKE_CAP = 10; // per account per rolling hour
 export const KEEP_MS = 24 * 60_000 * 60; // keep finished jobs so repeat callbacks stay idempotent
 export const QUIET_TZ = "America/New_York";
+export const HANDOFF_CAP = 3; // max bot-to-bot handoffs per chain
+export const DEFAULT_HANDOFF_TRIGGERS = ["asschub", "dummy", "claude"];
 
 /** Injectable clock: BOTHUB_NOW (ISO timestamp) freezes time for tests. */
 export function nowMs() {
@@ -78,10 +80,10 @@ const FILE = () => path.join(dataDir(), "agent-jobs.json");
 let loaded = null;
 function S() {
   if (!loaded) {
-    loaded = { jobs: {}, wakes: [] };
+    loaded = { jobs: {}, wakes: [], chains: {} };
     try {
       const raw = JSON.parse(fs.readFileSync(FILE(), "utf8"));
-      loaded = { jobs: raw.jobs ?? {}, wakes: raw.wakes ?? [] };
+      loaded = { jobs: raw.jobs ?? {}, wakes: raw.wakes ?? [], chains: raw.chains ?? {} };
     } catch {}
   }
   return loaded;
@@ -97,6 +99,35 @@ function prune() {
   const now = nowMs();
   for (const [id, j] of Object.entries(S().jobs)) if (now - j.ts > KEEP_MS) delete S().jobs[id];
   S().wakes = S().wakes.filter((w) => now - w.ts < WAKE_WINDOW_MS);
+  for (const [id, c] of Object.entries(S().chains)) if (now - c.ts > KEEP_MS) delete S().chains[id];
+}
+
+// ---------- handoff chains ----------
+// A chain starts with a human message. It remembers which bots were woken (each at most once) and
+// whether the "limit reached" note was already posted.
+export function startChain(id) {
+  prune();
+  S().chains[id] = { ts: nowMs(), woken: [], capNoted: false };
+  save();
+  return id;
+}
+export const getChain = (id) => S().chains[id];
+function chainOf(id) {
+  return (S().chains[id] ??= { ts: nowMs(), woken: [], capNoted: false });
+}
+export const chainWoken = (id, botId) => chainOf(id).woken.includes(botId);
+export function markChainWoken(id, botId) {
+  const c = chainOf(id);
+  if (!c.woken.includes(botId)) c.woken.push(botId);
+  save();
+}
+/** True the first time it is called for a chain (so the cap note is posted once). */
+export function claimCapNote(id) {
+  const c = chainOf(id);
+  if (c.capNoted) return false;
+  c.capNoted = true;
+  save();
+  return true;
 }
 
 const isOpen = (j, now = nowMs()) => j.status === "open" && now - j.ts <= EXPIRE_MS;
@@ -169,7 +200,9 @@ export function buildPayload(job, bot, text, visible) {
     job_id: job.id,
     room: job.room,
     bot_id: bot.id,
-    speaker: "You",
+    speaker: job.speaker ?? "You",
+    hop: job.hop ?? 0,
+    chain_id: job.chainId ?? null,
     text: trim(text, 4000),
     recent: visible.slice(-10).map((m) => ({ speaker: m.speaker, botId: m.botId ?? null, text: trim(m.text ?? "", 1500) })),
     reply_url: REPLY_URL,
