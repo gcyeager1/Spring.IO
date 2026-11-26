@@ -1,0 +1,65 @@
+{
+  "_comment": "Copy to config.json and edit. API keys are NEVER stored here - each account names the environment variable that holds its key. Prices are USD per 1M tokens; check your provider's current pricing page and update them.",
+  "port": 3000,
+  "accounts": [
+    {
+      "id": "grok-1",
+      "name": "Grok account 1",
+      "provider": "xai",
+      "apiKeyEnv": "XAI_API_KEY_1",
+      "pricing": { "inputPerM": 3.0, "outputPerM": 15.0, "cachedInputPerM": 0.75 }
+    },
+    {
+      "id": "grok-2",
+      "name": "Grok account 2",
+      "provider": "xai",
+      "apiKeyEnv": "XAI_API_KEY_2",
+      "pricing": { "inputPerM": 3.0, "outputPerM": 15.0, "cachedInputPerM": 0.75 }
+    },
+    {
+      "id": "grok-3",
+      "name": "Grok account 3",
+      "provider": "xai",
+      "apiKeyEnv": "XAI_API_KEY_3",
+      "pricing": { "inputPerM": 3.0, "outputPerM": 15.0, "cachedInputPerM": 0.75 }
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "provider": "anthropic",
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "pricing": { "inputPerM": 4.0, "outputPerM": 20.0, "cachedInputPerM": 0.2, "cacheWritePerM": 5.0 }
+    }
+  ],
+  "bots": [
+    {
+      "id": "nova",
+      "name": "Nova",
+      "account": "grok-1",
+      "model": "grok-4",
+      "systemPrompt": "You are Nova, an upbeat researcher. Keep replies short and conversational."
+    },
+    {
+      "id": "rook",
+      "name": "Rook",
+      "account": "grok-2",
+      "model": "grok-4",
+      "systemPrompt": "You are Rook, a skeptical critic who pokes holes in ideas. Keep replies short."
+    },
+    {
+      "id": "sage",
+      "name": "Sage",
+      "account": "grok-3",
+      "model": "grok-4",
+      "systemPrompt": "You are Sage, a calm summarizer who pulls the group toward conclusions. Keep replies short."
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "account": "claude",
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "systemPrompt": "You are Claude, taking part in a group chat with several Grok-based bots and a human. Keep replies short and conversational."
+    }
+  ]
+}

@@ -1,0 +1,151 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f6f4;
+  --surface: #ffffff;
+  --surface-2: #f0f0ee;
+  --border: #e2e2de;
+  --text: #191919;
+  --text-2: #666666;
+  --accent: #257de0;
+  --accent-ink: #ffffff;
+  --danger: #c62f30;
+  --grid: #e8e8e4;
+  --you: #eaf2fd;
+  --series-1: #257de0;
+  --series-2: #f47230;
+  --series-3: #00b894;
+  --series-4: #f2a600;
+  --series-5: #ee7fac;
+  --series-6: #008a17;
+  --series-7: #6a4ce2;
+  --series-8: #ec4647;
+  --series-other: #9a9a9a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121212;
+    --surface: #191919;
+    --surface-2: #232323;
+    --border: #2f2f2f;
+    --text: #efefef;
+    --text-2: #9c9c9c;
+    --accent: #338ced;
+    --danger: #eb6263;
+    --grid: #2a2a2a;
+    --you: #1b2a3d;
+    --series-1: #338ced;
+    --series-2: #e76624;
+    --series-3: #00a888;
+    --series-4: #d28e05;
+    --series-5: #e24d8b;
+    --series-6: #0aac23;
+    --series-7: #9887ef;
+    --series-8: #eb6263;
+    --series-other: #6f6f6f;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121212; --surface: #191919; --surface-2: #232323; --border: #2f2f2f;
+  --text: #efefef; --text-2: #9c9c9c; --accent: #338ced; --danger: #eb6263;
+  --grid: #2a2a2a; --you: #1b2a3d;
+  --series-1: #338ced; --series-2: #e76624; --series-3: #00a888; --series-4: #d28e05;
+  --series-5: #e24d8b; --series-6: #0aac23; --series-7: #9887ef; --series-8: #eb6263;
+  --series-other: #6f6f6f;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+button, input, textarea { font: inherit; color: inherit; }
+h1 { font-size: 18px; margin: 0; }
+h2 { font-size: 15px; margin: 0; }
+h3 { font-size: 13px; margin: 20px 0 8px; color: var(--text-2); text-transform: uppercase; letter-spacing: .04em; }
+
+.topbar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); }
+.status { margin-left: auto; color: var(--text-2); font-size: 13px; }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+
+button { cursor: pointer; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); padding: 6px 14px; }
+button.ghost { background: transparent; color: var(--text); border-color: var(--border); }
+button.ghost.danger { color: var(--danger); border-color: var(--danger); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ---------- Chat ---------- */
+.chat { display: flex; flex-direction: column; height: calc(100vh - 90px); min-height: 520px; }
+@media (max-width: 900px) { .chat { height: auto; } }
+.participants { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 0 0 12px; }
+.participants legend { color: var(--text-2); font-size: 12px; padding: 0 4px; }
+.bot-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.bot-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; cursor: pointer; user-select: none; }
+.bot-chip input { margin: 0; }
+.bot-chip .sub { color: var(--text-2); font-size: 12px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+
+.messages { list-style: none; margin: 0; padding: 4px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; min-height: 240px; }
+.msg { max-width: 88%; padding: 8px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); overflow-wrap: anywhere; }
+.msg .body { white-space: pre-wrap; }
+.msg.you { align-self: flex-end; background: var(--you); }
+.msg.err { border-color: var(--danger); color: var(--danger); }
+.msg .who { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; margin-bottom: 2px; }
+.msg .who time, .msg .who .note { font-weight: 400; color: var(--text-2); }
+.empty { color: var(--text-2); text-align: center; margin: auto; }
+.typing { color: var(--text-2); font-size: 13px; padding: 6px 4px; }
+
+.composer { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; }
+.composer textarea { width: 100%; resize: vertical; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--surface); }
+.composer-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.composer-row #send-btn { margin-left: auto; }
+.rounds { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 13px; }
+.rounds input { width: 56px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.hint { color: var(--text-2); font-size: 12px; }
+
+/* ---------- Dashboard ---------- */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; background: transparent; color: var(--text-2); padding: 4px 12px; }
+.seg button.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
+
+.hero { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.hero .big { font-size: 32px; font-weight: 700; letter-spacing: -.01em; }
+.hero .meta { color: var(--text-2); }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.tile { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.tile .name { display: flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 4px; }
+.tile .val { font-size: 20px; font-weight: 700; }
+.tile .row { display: flex; justify-content: space-between; color: var(--text-2); font-size: 12px; }
+.tile .warn { color: var(--danger); font-size: 12px; }
+
+.chart-card { margin: 16px 0 0; border: 1px solid var(--border); border-radius: 10px; padding: 12px; position: relative; }
+.chart-card figcaption { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.chart-title { font-weight: 600; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; color: var(--text-2); font-size: 12px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.chart svg { display: block; width: 100%; height: auto; }
+.chart text { fill: var(--text-2); font-size: 11px; }
+.chart .gridline { stroke: var(--grid); stroke-width: 1; }
+.chart .hit { fill: transparent; }
+.chart .col:hover .hit, .chart .col.active .hit { fill: var(--text); fill-opacity: .05; }
+.tooltip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 14px rgb(0 0 0 / .12); min-width: 160px; z-index: 2; }
+.tooltip .t-head { font-weight: 600; margin-bottom: 4px; }
+.tooltip .t-row { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.tooltip .t-row span:first-child { display: inline-flex; align-items: center; gap: 6px; }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { color: var(--text-2); font-weight: 600; font-size: 12px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.err { color: var(--danger); }
+.footnote { color: var(--text-2); font-size: 12px; margin-top: 12px; }
