@@ -16,7 +16,7 @@ import { estimateSend } from "./estimate.js";
 import { validateReport } from "../public/planusage.js";
 import { savePlanUsage, getPlanUsage } from "./planusage-store.js";
 import * as ra from "./realagent.js";
-import { bridgeView, saveWebhook, clearWebhook, isBridgeBot } from "./bridge-store.js";
+import { bridgeView, saveWebhook, clearWebhook, isBridgeBot, BRIDGE_BOTS, validateWebhookUrl } from "./bridge-store.js";
 import { replyTokenMeta, revealGarrettReplyToken, revealLifteasyReplyToken, regenerateGarrettReplyToken, replyRole } from "./reply-tokens.js";
 
 const cfg = loadConfig();
@@ -244,6 +244,19 @@ const clientIp = (req) => {
   }
   return req.socket.remoteAddress ?? "unknown";
 };
+// Sliding-window limiter for self-register: 10 attempts (any outcome) per rolling hour per IP.
+const SELF_REG_MAX = 10, SELF_REG_WINDOW = 3600_000;
+const selfRegHits = new Map();
+/** 0 if allowed (and counted), else seconds to wait. */
+function selfRegisterHit(ip) {
+  const now = Date.now();
+  const arr = (selfRegHits.get(ip) ?? []).filter((t) => now - t < SELF_REG_WINDOW);
+  if (arr.length >= SELF_REG_MAX) { selfRegHits.set(ip, arr); return Math.max(1, Math.ceil((arr[0] + SELF_REG_WINDOW - now) / 1000)); }
+  arr.push(now);
+  selfRegHits.set(ip, arr);
+  if (selfRegHits.size > 5000) for (const [k, v] of selfRegHits) if (!v.some((t) => now - t < SELF_REG_WINDOW)) selfRegHits.delete(k);
+  return 0;
+}
 const isSecure = (req) => req.socket.encrypted || (TRUST_PROXY && req.headers["x-forwarded-proto"] === "https");
 const tokenOf = (req) => parseCookies(req.headers.cookie)[COOKIE];
 const SECURITY_HEADERS = {
@@ -332,6 +345,39 @@ const server = http.createServer(async (req, res) => {
       savePlanUsage(v.report);
       broadcast("usage", {});
       return json(res, 200, { ok: true });
+    }
+    // Self-register: a bot on its own box sets/clears its webhook with its account reply token.
+    // Bearer only (a session cookie alone is not enough). Order: rate limit, auth, account, body, store.
+    const selfM = /^\/api\/bridge\/([^/]+)\/self-register$/.exec(url.pathname);
+    if (selfM && (req.method === "PUT" || req.method === "DELETE")) {
+      const wait = selfRegisterHit(clientIp(req));
+      if (wait) { res.setHeader("Retry-After", String(wait)); return json(res, 429, { error: "Too many requests" }); }
+      const m = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ""));
+      const role = replyRole(m?.[1] ?? "", Boolean(m));
+      if (!role) return json(res, 401, { error: "Unauthorized" });
+      let id;
+      try { id = decodeURIComponent(selfM[1]); } catch { id = ""; }
+      const bridgeBot = BRIDGE_BOTS.find((b) => b.id === id);
+      if (!bridgeBot) return json(res, 400, { error: "Unknown bridge bot" });
+      if (bridgeBot.account !== (role === "garrett" ? "grok-2" : "grok-1")) {
+        return json(res, 403, { error: "Token not valid for this bot" });
+      }
+      if (req.method === "DELETE") {
+        clearWebhook(id);
+        console.log(`bridge self-register cleared for ${id}`);
+        return json(res, 200, { ok: true, botId: id, set: false });
+      }
+      let body;
+      try { body = await readBody(req); } catch { return json(res, 400, { error: "Invalid JSON" }); }
+      const sUrl = typeof body?.url === "string" ? body.url.trim() : "";
+      const sKey = typeof body?.key === "string" ? body.key.trim() : "";
+      if (!sUrl || !sKey) return json(res, 400, { error: "Need url and key" });
+      const bad = validateWebhookUrl(sUrl);
+      if (bad) return json(res, 400, { error: bad });
+      const r = saveWebhook(id, sUrl, sKey);
+      if (r.error) return json(res, 400, { error: r.error });
+      console.log(`bridge self-register for ${id}`);
+      return json(res, 200, { ok: true, botId: id, set: true });
     }
     // Real-agent callback: bearer token (BOTHUB_REPLY_TOKEN) instead of a session cookie.
     // Server-to-server, so no Origin header is expected; browsers sending a foreign Origin were
