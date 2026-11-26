@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ROOT } from "./config.js";
+import { dataDir } from "./config.js";
 
-const DATA = path.join(ROOT, "data");
+const DATA = dataDir();
 fs.mkdirSync(DATA, { recursive: true });
 const USAGE_FILE = path.join(DATA, "usage.jsonl");
 const CHAT_FILE = path.join(DATA, "chat.jsonl");

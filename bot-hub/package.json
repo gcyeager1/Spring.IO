@@ -7,7 +7,9 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "mock": "BOT_HUB_MOCK=1 node src/server.js"
+    "mock": "BOT_HUB_MOCK=1 node src/server.js",
+    "test": "node --test test/pricing.test.js test/server.test.js",
+    "hash-password": "node scripts/hash-password.js"
   },
   "engines": {
     "node": ">=18"

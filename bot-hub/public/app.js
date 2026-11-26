@@ -78,6 +78,7 @@ async function api(path, opts = {}) {
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) location.href = "/login";
   if (!res.ok) throw new Error(data.error ?? res.statusText);
   return data;
 }
@@ -978,3 +979,8 @@ function connectEvents() {
   });
   setInterval(refreshUsage, 60_000); // keeps "x min ago" fresh
 })().catch((e) => setStatus(`Failed to start: ${e.message}`));
+
+$("#logout-btn")?.addEventListener("click", async () => {
+  await fetch("/api/logout", { method: "POST" }).catch(() => {});
+  location.href = "/login";
+});

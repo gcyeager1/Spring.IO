@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "EZ Lift Bot Hub",
+    "slug": "ez-lift-bot-hub",
+    "owner": "gcyeager1",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0d1117",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0d1117"
+    },
+    "plugins": [
+      "expo-status-bar"
+    ],
+    "android": {
+      "package": "com.ezliftgaragedoor.bothub",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0d1117"
+      }
+    },
+    "extra": {
+      "hubUrl": "https://bots.ezliftgaragedoorservice.com",
+      "eas": {
+        "projectId": "7cb768b5-5c17-45aa-9ddd-8ffc4b4fe9e9"
+      }
+    }
+  }
+}
