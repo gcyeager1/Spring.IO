@@ -72,7 +72,8 @@ const accountName = (id) => account(id)?.name ?? id;
 // Retired bot ids (in old usage data but not in config) just show the stored id.
 const botLabel = (id) => (bot(id) ? `${bot(id).name} · ${accountName(bot(id).account)}` : id);
 const blankStats = () => ({ planCalls: 0, apiValue: 0, requests: 0, errors: 0, input: 0, cachedInput: 0, cacheWrite: 0, output: 0, cost: 0, latencyN: 0, latencySum: 0, groupCost: 0, directCost: 0, groupCalls: 0, directCalls: 0, daily: {} });
-const onPlan = (b) => Boolean(account(b.account)?.plan);
+const onPlan = (b) => Boolean(account(b.account)?.plan) || Boolean(b.realAgent);
+const realBadge = (b) => (b?.realAgent ? ` <span class="real-badge" title="A real agent: woken by @mention or in its private chat, replies when ready">Real bot</span>` : "");
 const tokensIn = (s) => (s.input ?? 0) + (s.cachedInput ?? 0) + (s.cacheWrite ?? 0);
 const avgLatency = (s) => (s.latencyN ? s.latencySum / s.latencyN : 0);
 
@@ -154,7 +155,7 @@ function renderSidebar() {
           aria-label="Include ${esc(b.name)} in the group chat" title="Include in the group chat" />
         ${avatarHtml(b, botState(b))}
         <span class="bot-text">
-          <span class="bot-name">${esc(b.name)}${unreadBadge(`dm:${b.id}`)}<small>${last ? fmtTime(last.ts) : ""}</small></span>
+          <span class="bot-name"><span>${esc(b.name)}${realBadge(b)}</span>${unreadBadge(`dm:${b.id}`)}<small>${last ? fmtTime(last.ts) : ""}</small></span>
           <span class="bot-role">${esc(accountName(b.account))} · ${esc(b.model)}</span>
           <span class="bot-preview">${esc(last ? last.text : "No messages yet")}</span>
         </span>
@@ -316,6 +317,7 @@ function messageHtml(m) {
   const note = m.note ? ` <span class="note">· ${esc(m.note)}</span>` : "";
   const av = you ? "" : b ? avatarHtml(b) : `<span class="avatar" style="background:var(--series-other)">${esc((m.speaker ?? "?").trim()[0]?.toUpperCase() ?? "?")}</span>`;
   const acct = !you && (m.account || b?.account) ? ` <span class="note">· ${esc(accountName(m.account ?? b.account))}</span>` : "";
+  if (m.system) return `<li class="msg sys"><div class="bubble"><div class="body">${esc(m.text)}</div></div></li>`;
   return `<li class="msg ${you ? "you" : ""} ${m.error ? "err" : ""}">${av}<div class="bubble">
     <div class="who">${esc(m.speaker)}${acct}<time datetime="${new Date(m.ts).toISOString()}">${fmtTime(m.ts)}</time>${note}</div><div class="body">${esc(m.text)}</div></div></li>`;
 }
@@ -352,7 +354,7 @@ function renderChatHeader() {
   if (isDm(room)) {
     const b = bot(dmBot(room));
     $("#chat-avatar").innerHTML = avatarHtml(b);
-    $("#chat-name").textContent = b.name;
+    $("#chat-name").innerHTML = `${esc(b.name)}${realBadge(b)}`;
     $("#chat-sub").textContent = `${accountName(b.account)} · ${b.model} · Private chat`;
     $("#input").placeholder = `Message ${b.name} (${accountName(b.account)})… (Enter to send, Shift+Enter for a new line)`;
   } else {
@@ -833,8 +835,8 @@ function renderKpis(u) {
     kpi("Private chats", fmtUSD(t.directCost)) +
     kpi("Failed calls", t.errors, t.errors ? "bad" : "") +
     kpi("Avg reply time", fmtSecs(avgLatency(t))) +
-    (state.config.accounts.some((a) => a.plan)
-      ? kpi("Calls on your Claude plan", t.planCalls, "", `≈ ${fmtUSD(t.apiValue)} at API prices`)
+    (state.config.accounts.some((a) => a.plan) || state.config.bots.some((b) => b.realAgent)
+      ? kpi("Plan runs (no API spend)", t.planCalls, "", `≈ ${fmtUSD(t.apiValue)} at API prices`)
       : "");
 }
 
