@@ -20,13 +20,22 @@ export function loadConfig() {
       throw new Error(`Bot "${bot.id}" refers to unknown account "${bot.account}" in ${path.basename(file)}`);
     }
   }
-  return { ...cfg, file, accountsById: accounts, handoffTriggers: handoffTriggers(cfg) };
+  return { ...cfg, file, accountsById: accounts, handoffTriggers: handoffTriggers(cfg), agentPosters: agentPosters(cfg) };
+}
+
+const list = (v) => (Array.isArray(v) ? v : String(v ?? "").split(","))
+  .map((x) => String(x).trim()).filter(Boolean);
+
+/** Bot ids allowed to post directly via POST /api/agent-post: env (comma-separated) > config.json > ["asschub"]. */
+export function agentPosters(cfg) {
+  const env = list(process.env.BOTHUB_AGENT_POSTERS);
+  if (env.length) return env;
+  const fromCfg = list(cfg.agentPosters);
+  return fromCfg.length ? fromCfg : ["asschub"];
 }
 
 /** Bot ids allowed to hand off by @mention: env (comma-separated) > config.json > default. */
 export function handoffTriggers(cfg) {
-  const list = (v) => (Array.isArray(v) ? v : String(v ?? "").split(","))
-    .map((x) => String(x).trim()).filter(Boolean);
   const env = list(process.env.BOTHUB_HANDOFF_TRIGGERS);
   if (env.length) return env;
   const fromCfg = list(cfg.handoffTriggers);

@@ -17,6 +17,7 @@ export const KEEP_MS = 24 * 60_000 * 60; // keep finished jobs so repeat callbac
 export const QUIET_TZ = "America/New_York";
 export const HANDOFF_CAP = 3; // max bot-to-bot handoffs per chain
 export const STALE_JOB_MS = 10 * 60_000; // an open job older than this no longer blocks a new wake
+export const AGENT_POST_CAP = 20; // direct posts per account per rolling hour
 export const DEFAULT_HANDOFF_TRIGGERS = ["asschub", "dummy", "claude"];
 
 /** Injectable clock: BOTHUB_NOW (ISO timestamp) freezes time for tests. */
@@ -81,10 +82,10 @@ const FILE = () => path.join(dataDir(), "agent-jobs.json");
 let loaded = null;
 function S() {
   if (!loaded) {
-    loaded = { jobs: {}, wakes: [], chains: {} };
+    loaded = { jobs: {}, wakes: [], chains: {}, posts: [] };
     try {
       const raw = JSON.parse(fs.readFileSync(FILE(), "utf8"));
-      loaded = { jobs: raw.jobs ?? {}, wakes: raw.wakes ?? [], chains: raw.chains ?? {} };
+      loaded = { jobs: raw.jobs ?? {}, wakes: raw.wakes ?? [], chains: raw.chains ?? {}, posts: raw.posts ?? [] };
     } catch {}
   }
   return loaded;
@@ -100,6 +101,7 @@ function prune() {
   const now = nowMs();
   for (const [id, j] of Object.entries(S().jobs)) if (now - j.ts > KEEP_MS) delete S().jobs[id];
   S().wakes = S().wakes.filter((w) => now - w.ts < WAKE_WINDOW_MS);
+  S().posts = S().posts.filter((p) => now - p.ts < WAKE_WINDOW_MS);
   for (const [id, c] of Object.entries(S().chains)) if (now - c.ts > KEEP_MS) delete S().chains[id];
 }
 
@@ -164,6 +166,16 @@ export function sanitizeBody(raw, max = 200) {
 export function wakesInWindow(account) {
   prune();
   return S().wakes.filter((w) => w.account === account).length;
+}
+
+export function agentPostsInWindow(account) {
+  prune();
+  return S().posts.filter((p) => p.account === account).length;
+}
+export function recordAgentPost(account) {
+  prune();
+  S().posts.push({ ts: nowMs(), account });
+  save();
 }
 
 /** Reserve a job (counts against the account cap). Caller must have checked caps first. */
