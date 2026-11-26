@@ -32,6 +32,9 @@ const state = {
   typing: new Map(), // room -> botId
   unread: {}, // room -> count
   usage: null,
+  estimate: null, // latest estimate for the next send
+  pendingEstimate: {}, // room -> estimate made when you pressed send
+  lastSend: null, // { room, est, actual }
 };
 
 const isDm = (room) => String(room).startsWith("dm:");
@@ -165,6 +168,7 @@ function wireSidebar() {
     store.set("participants", [...state.included]);
     renderSidebar();
     if (state.view === "group") renderChatHeader();
+    scheduleEstimate(0);
   });
   $("#bot-list").addEventListener("click", (e) => {
     if (e.target.closest(".bot-check")) return;
@@ -201,6 +205,7 @@ async function setView(view) {
     renderDashboard(state.usage);
   }
   renderSidebar();
+  scheduleEstimate(0);
 }
 
 // ======================= Status strip =======================
@@ -324,9 +329,16 @@ async function send(text) {
   const room = chatRoom() ?? "group";
   const participants = state.config.bots.filter((b) => state.included.has(b.id)).map((b) => b.id);
   if (room === "group" && !participants.length) return setStatus("Tick at least one bot in the sidebar for the group chat.");
+  const est = state.estimate;
+  if (est?.project.budget && est.project.after > est.project.budget) {
+    const ok = confirm(`This send is estimated at ${fmtUSD(est.message.cost)}, which would take the project to about ${fmtUSD(est.project.after)} - over your ${fmtUSD(est.project.budget)} budget. Send anyway?`);
+    if (!ok) return;
+  }
   try {
     await api("/api/messages", { method: "POST", body: { room, text, participants, rounds: Number($("#rounds").value) || 1 } });
+    state.pendingEstimate[room] = est?.message.cost ?? 0;
     $("#input").value = "";
+    scheduleEstimate(0);
     autosize();
     if (state.view === "dash") setView(room);
   } catch (e) {
@@ -372,6 +384,88 @@ function wireChat() {
     setBotFilter(dmBot(chatRoom()));
     setView("dash");
   });
+}
+
+// ======================= Usage meter =======================
+
+const meterRoom = () => chatRoom() ?? "group";
+const groupParticipants = () => state.config.bots.filter((b) => state.included.has(b.id)).map((b) => b.id);
+
+let estimateTimer = null;
+let estimateSeq = 0;
+function scheduleEstimate(delay = 250) {
+  clearTimeout(estimateTimer);
+  estimateTimer = setTimeout(requestEstimate, delay);
+}
+async function requestEstimate() {
+  const seq = ++estimateSeq;
+  try {
+    const est = await api("/api/estimate", {
+      method: "POST",
+      body: {
+        room: meterRoom(),
+        text: $("#input").value.trim(),
+        participants: groupParticipants(),
+        rounds: Number($("#rounds").value) || 1,
+      },
+    });
+    if (seq !== estimateSeq) return; // a newer request is on its way
+    state.estimate = est;
+    renderMeter();
+  } catch {
+    /* the meter is best-effort; keep the last estimate */
+  }
+}
+
+function renderMeter() {
+  const est = state.estimate;
+  if (!est) return;
+  const m = est.message;
+  const room = meterRoom();
+  const typed = $("#input").value.trim().length > 0;
+  const label = typed ? "This message" : isDm(room) ? "Next reply" : "Let them talk";
+  const replies = `${m.calls} repl${m.calls === 1 ? "y" : "ies"}${m.rounds > 1 ? ` over ${m.rounds} rounds` : ""}`;
+  $("#m-msg").innerHTML = m.calls
+    ? `<span class="m-label">${label}</span> ≈ <strong>${fmtUSD(m.cost)}</strong> · ${replies} · ~${fmtNum(m.input)} in / ${fmtNum(m.output)} out`
+    : `<span class="m-label">${label}</span> no bots selected`;
+
+  const p = est.project;
+  let budget = "";
+  if (p.budget) {
+    const pctSpent = Math.min(100, (p.spent / p.budget) * 100);
+    const pctNext = Math.max(0, Math.min(100, (p.after / p.budget) * 100) - pctSpent);
+    const level = p.after > p.budget ? "over" : p.after > p.budget * 0.9 ? "warn" : "";
+    const flag = level === "over" ? `<span class="m-flag over">over budget</span>` : level === "warn" ? `<span class="m-flag warn">near budget</span>` : "";
+    budget = `<span class="m-bar ${level}" title="${fmtUSD(p.spent)} spent + ≈${fmtUSD(p.after - p.spent)} for this send, of ${fmtUSD(p.budget)}">
+      <span class="spent" style="width:${pctSpent}%"></span><span class="next" style="width:${pctNext}%"></span></span>
+      ${Math.round((p.after / p.budget) * 100)}% of ${fmtUSD(p.budget)} ${flag}`;
+  }
+  $("#m-proj").innerHTML = `<span class="m-label">Project</span> <strong>${fmtUSD(p.spent)}</strong> spent → ≈ <strong>${fmtUSD(p.after)}</strong> after ${budget}`;
+
+  const last = state.lastSend;
+  $("#m-last").hidden = !last;
+  if (last) {
+    const diff = last.est ? ((last.actual.cost - last.est) / last.est) * 100 : 0;
+    const where = isDm(last.room) ? botName(dmBot(last.room)) : "group";
+    $("#m-last").innerHTML = `<span class="m-label">Last send (${esc(where)})</span> est ${fmtUSD(last.est)} → actual <strong>${fmtUSD(last.actual.cost)}</strong>
+      ${last.est ? `<span class="m-diff">(${diff >= 0 ? "+" : ""}${diff.toFixed(0)}%)</span>` : ""}`;
+  }
+}
+
+function wireMeter() {
+  $("#m-msg").addEventListener("mousemove", (e) => {
+    const m = state.estimate?.message;
+    if (!m?.perBot?.length) return;
+    showTip(
+      e,
+      `<div class="t-head">Estimate by bot</div>${m.perBot
+        .map((r) => tipRow(botColor(r.bot), `${botName(r.bot)} ×${r.calls}`, `${fmtUSD(r.cost)} · ~${fmtNum(r.input)} in / ${fmtNum(r.output)} out`))
+        .join("")}<div class="t-row"><span>Rough guide: ~4 characters per token, replies sized like each bot's recent ones.</span></div>`,
+    );
+  });
+  $("#m-msg").addEventListener("mouseleave", hideTip);
+  $("#input").addEventListener("input", () => scheduleEstimate());
+  $("#rounds").addEventListener("input", () => scheduleEstimate(0));
 }
 
 // ======================= Charts =======================
@@ -799,8 +893,13 @@ function connectEvents() {
     renderSidebar();
   });
   es.addEventListener("status", (e) => {
-    const { running, done } = JSON.parse(e.data);
+    const { running, done, actual } = JSON.parse(e.data);
     state.running = new Set(running);
+    if (done && actual && done in state.pendingEstimate) {
+      state.lastSend = { room: done, est: state.pendingEstimate[done], actual };
+      delete state.pendingEstimate[done];
+    }
+    if (done) scheduleEstimate(0); // the transcript grew, so the next estimate changes
     if (done) {
       state.typing.delete(done);
       if (done === chatRoom()) $("#typing").hidden = true;
@@ -815,6 +914,7 @@ function connectEvents() {
     state.rooms.set(room, []);
     if (room === chatRoom()) renderChat();
     renderSidebar();
+    scheduleEstimate(0);
   });
   es.onerror = () => setStatus("Reconnecting to server…");
   es.onopen = refreshStatusText;
@@ -841,6 +941,7 @@ function connectEvents() {
   wireSidebar();
   wireChat();
   wireDashboard();
+  wireMeter();
   await refreshUsage();
   await setView(state.view);
   connectEvents();

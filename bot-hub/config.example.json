@@ -1,6 +1,8 @@
 {
   "_comment": "Copy to config.json and edit. API keys are NEVER stored here - each account names the environment variable that holds its key. Prices are USD per 1M tokens; check your provider's current pricing page and update them.",
   "port": 3000,
+  "_budgetUSD": "Optional overall project budget in USD. The usage meter warns before a message would go over it. Set to 0 to turn it off.",
+  "budgetUSD": 25,
   "accounts": [
     {
       "id": "grok-1",

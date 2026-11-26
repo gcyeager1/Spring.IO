@@ -8,6 +8,7 @@ It has a dark "command center" layout, with a light theme available from the The
 - **Status strip:** shows each account's state (ok, last call failed, no API key) and today's spend.
 - **Private chats:** each bot has its own one-on-one conversation, kept separate from the group. The header shows that bot's cost, calls, tokens and reply time, and **Usage ›** opens the dashboard filtered to that bot.
 - **Group chat:** send a message and the ticked bots reply in turn, each seeing the whole conversation. Set **Rounds** to let them go back and forth, or press **Let them talk** to continue without a new message.
+- **Usage meter:** sits just above the message box and updates as you type. It estimates what your next send will cost, counting every bot reply across all rounds. Hover over it for a per-bot breakdown. It also shows the project's total spend so far and the estimated total after this send. Once a send finishes, it shows the estimate next to the actual cost so you can see how accurate the estimates are. Estimates assume about 4 characters per token and replies the size of each bot's recent ones.
 - **Dashboard:** filter everything to one bot (Claude included) or view all bots together. The **per-bot breakdown** gives each bot a card with its cost, share of spend, a daily-cost sparkline, calls, tokens in/out, average reply time, failed calls and a group-vs-private split. Click a card to filter to that bot. Below that are cumulative cost by bot, tokens per bot, daily cost by bot, a weekday × hour activity heatmap, a per-account table and a log of recent calls showing whether each call was group or private. Every chart has hover details, the dashboard updates live, and you can switch between 24h, 7d, 30d and All.
 
 ## Quick start
@@ -30,6 +31,7 @@ npm run mock
 2. Edit `config.json`:
    - **accounts:** one entry per API account. Two Grok (xAI) accounts and one Claude account are set up by default. `apiKeyEnv` is the **name** of the environment variable that holds that account's key. Keys are never written to the config.
    - **bots:** give each bot a name, an account, a model and a personality (`systemPrompt`). You can put several bots on the same account.
+   - **budgetUSD:** optional overall budget. The meter shows how much of it you've used, warns at 90%, and asks you to confirm before a send that would go over. Set it to 0 to turn the budget off.
    - **pricing:** USD per 1M tokens, used for the cost estimates. **Check the Grok prices and model names against xAI's current pricing page.** The defaults are placeholders.
 3. Set the keys and start the app:
    ```bash

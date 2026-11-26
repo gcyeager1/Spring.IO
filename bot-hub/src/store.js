@@ -161,3 +161,6 @@ export function summarizeUsage(sinceMs, accounts, bots, botFilter, todayStart = 
     recent: rows.slice(-30).reverse().map((u) => ({ ...u, room: roomOf(u) })),
   };
 }
+
+/** Read-only view of every usage record (for estimates). */
+export const getUsage = () => usage;

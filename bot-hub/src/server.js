@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { ROOT, loadConfig, publicConfig, isMock } from "./config.js";
 import { callBot, costOf } from "./providers.js";
 import { addMessage, getChat, clearChat, recordUsage, summarizeUsage, isDirect } from "./store.js";
+import { estimateSend } from "./estimate.js";
 
 const cfg = loadConfig();
 const PORT = Number(process.env.PORT ?? cfg.port ?? 3000);
@@ -29,6 +30,7 @@ async function runConversation(room, participantIds, rounds) {
   const participants = participantIds.map((id) => botsById.get(id));
   const names = ["You", ...participants.map((b) => b.name)];
   const run = { stop: false };
+  const actual = { calls: 0, input: 0, output: 0, cost: 0 };
   runs.set(room, run);
   broadcast("status", { running: runningRooms() });
   try {
@@ -46,6 +48,11 @@ async function runConversation(room, participantIds, rounds) {
           error = err?.message ?? String(err);
         }
         const usage = result?.usage ?? { input: 0, cachedInput: 0, cacheWrite: 0, output: 0 };
+        const callCost = costOf(usage, account.pricing);
+        actual.calls += 1;
+        actual.input += usage.input + usage.cachedInput + usage.cacheWrite;
+        actual.output += usage.output;
+        actual.cost += callCost;
         recordUsage({
           ts: Date.now(),
           room,
@@ -53,7 +60,7 @@ async function runConversation(room, participantIds, rounds) {
           bot: bot.id,
           model: result?.model ?? bot.model,
           ...usage,
-          cost: costOf(usage, account.pricing),
+          cost: callCost,
           latencyMs: Date.now() - started,
           ok: !error,
           error,
@@ -78,7 +85,7 @@ async function runConversation(room, participantIds, rounds) {
     }
   } finally {
     runs.delete(room);
-    broadcast("status", { running: runningRooms(), done: room });
+    broadcast("status", { running: runningRooms(), done: room, actual });
   }
 }
 
@@ -171,6 +178,14 @@ const server = http.createServer(async (req, res) => {
         runConversation(room, participants, rounds).catch((e) => console.error(e));
         return json(res, 202, { ok: true });
       }
+    }
+
+    if (url.pathname === "/api/estimate" && req.method === "POST") {
+      const body = await readBody(req);
+      const room = String(body.room ?? "group");
+      if (!validRoom(room)) return json(res, 400, { error: "Unknown room" });
+      const participants = (body.participants ?? []).filter((id) => botsById.has(id));
+      return json(res, 200, estimateSend(cfg, { room, text: String(body.text ?? ""), participants, rounds: body.rounds }));
     }
 
     if (url.pathname === "/api/stop" && req.method === "POST") {

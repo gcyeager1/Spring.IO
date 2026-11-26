@@ -116,6 +116,14 @@
       <p class="footnote">Costs are estimates from token counts and the prices in your config, and only include calls made through Bot Hub.</p>
     </section>
 
+    <div class="dock">
+    <!-- Usage meter: estimate for the next send + project total -->
+    <div id="meter" class="meter" aria-live="polite">
+      <div id="m-msg" class="m-block"></div>
+      <div id="m-proj" class="m-block"></div>
+      <div id="m-last" class="m-block" hidden></div>
+    </div>
+
     <!-- Composer -->
     <form id="composer" class="composer">
       <textarea id="input" rows="1" placeholder="Message the group…"></textarea>
@@ -125,6 +133,7 @@
       <button id="continue-btn" class="ghost group-only" type="button" title="Let the bots keep talking without a new message">Let them talk</button>
       <button id="send-btn" type="submit" aria-label="Send">↑</button>
     </form>
+    </div>
   </div>
 </div>
 <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
