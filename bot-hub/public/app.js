@@ -41,7 +41,7 @@ const state = {
 
 const isDm = (room) => String(room).startsWith("dm:");
 const dmBot = (room) => room.slice(3);
-const chatRoom = () => (state.view === "dash" ? null : state.view);
+const chatRoom = () => (state.view === "dash" || state.view === "settings" ? null : state.view);
 
 // ---------- formatting ----------
 const fmtUSD = (n) => (n >= 100 ? `$${n.toFixed(0)}` : n >= 1 ? `$${n.toFixed(2)}` : n === 0 ? "$0" : `$${n.toFixed(4)}`);
@@ -201,19 +201,88 @@ async function setView(view) {
   if (isDm(view) && !bot(dmBot(view))) view = "group";
   state.view = view;
   store.set("view2", view);
-  const chat = view !== "dash";
+  const chat = view !== "dash" && view !== "settings";
   $("#view-chat").hidden = !chat;
-  $("#view-dash").hidden = chat;
+  $("#view-dash").hidden = view !== "dash";
+  $("#view-settings").hidden = view !== "settings";
+  if (view === "settings") loadFeedKeys();
   if (chat) {
     delete state.unread[view];
     if (!state.rooms.has(view)) state.rooms.set(view, await api(`/api/messages?room=${encodeURIComponent(view)}`));
     renderChat();
-  } else if (state.usage) {
+  } else if (view === "dash" && state.usage) {
     renderDashboard(state.usage);
   }
   renderSidebar();
   scheduleEstimate(0);
 }
+
+// ======================= Settings: usage feed keys =======================
+
+const FEED_EXAMPLE = `POST ${location.origin}/api/plan-usage
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "account": "garrett",
+  "plan": "Ultra",
+  "percentUsed": 8.1,
+  "resetsAt": "2026-12-03T06:36:00-05:00",
+  "onDemand": "Additional usage credits left: $0",
+  "period": "this_week",
+  "bots": [{ "name": "Dummy", "sharePct": 48 }],
+  "routines": [],
+  "reportedAt": "2026-11-26T15:21:00-05:00"
+}`;
+
+function hideFeedToken() {
+  const t = $("#fk-token");
+  t.value = "";
+  t.hidden = true;
+}
+function showFeedMeta(m) {
+  $("#fk-meta").textContent = m?.exists ? `created ${m.createdAt ? new Date(m.createdAt).toLocaleString() : "earlier"}` : "no key yet";
+}
+async function loadFeedKeys() {
+  $("#fk-example").textContent = FEED_EXAMPLE;
+  hideFeedToken();
+  $("#fk-msg").textContent = "";
+  try {
+    showFeedMeta((await api("/api/ingest-keys")).garrett);
+  } catch (e) {
+    $("#fk-msg").textContent = e.message;
+  }
+}
+function initFeedKeys() {
+  const msg = (t) => ($("#fk-msg").textContent = t);
+  $("#fk-reveal").addEventListener("click", async () => {
+    try {
+      const r = await api("/api/ingest-keys/garrett/reveal", { method: "POST" });
+      $("#fk-token").value = r.token;
+      $("#fk-token").hidden = false;
+      showFeedMeta(r);
+      msg("");
+    } catch (e) { msg(e.message); }
+  });
+  $("#fk-copy").addEventListener("click", async () => {
+    try {
+      const r = await api("/api/ingest-keys/garrett/reveal", { method: "POST" });
+      await navigator.clipboard.writeText(r.token);
+      msg("Copied to clipboard.");
+    } catch (e) { msg("Copy failed: " + e.message); }
+  });
+  $("#fk-regen").addEventListener("click", async () => {
+    if (!confirm("Regenerate the garrett key? The current key stops working immediately and Dummy must be updated.")) return;
+    try {
+      const r = await api("/api/ingest-keys/garrett/regenerate", { method: "POST" });
+      $("#fk-token").value = r.token;
+      $("#fk-token").hidden = false;
+      showFeedMeta(r);
+      msg("New key issued. The previous key is revoked.");
+    } catch (e) { msg(e.message); }
+  });
+}
+initFeedKeys();
 
 // ======================= Status strip =======================
 

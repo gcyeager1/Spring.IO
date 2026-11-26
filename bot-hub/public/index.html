@@ -19,6 +19,7 @@
     <nav class="nav" aria-label="Views">
       <button type="button" class="nav-item" data-view="group"># Group chat <span class="unread" data-unread="group" hidden></span></button>
       <button type="button" class="nav-item" data-view="dash">▦ Dashboard</button>
+      <button type="button" class="nav-item" data-view="settings">⚙ Settings</button>
     </nav>
 
     <div class="side-head">
@@ -120,6 +121,29 @@
         </figure>
       </div>
       <p class="footnote">Costs are estimates from token counts and the prices in your config, and only include calls made through Bot Hub.</p>
+    </section>
+
+    <!-- Settings view -->
+    <section id="view-settings" class="view dash-view" aria-label="Settings" hidden>
+      <div class="view-head"><h1>Settings</h1></div>
+      <h2 class="section">Usage feed keys</h2>
+      <div class="grid">
+        <figure class="card">
+          <figcaption><span class="card-title">garrett yeager</span><span id="fk-meta" class="legend"></span></figcaption>
+          <p class="footnote">Key for the Grok Bot (Dummy) on the garrett yeager account. It can only post <code>"garrett"</code> reports.</p>
+          <input id="fk-token" type="text" readonly hidden autocomplete="off" spellcheck="false" style="width:100%;font-family:monospace;margin:8px 0" />
+          <div class="fk-actions" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <button id="fk-reveal" type="button" class="ghost small">Reveal</button>
+            <button id="fk-copy" type="button" class="ghost small">Copy</button>
+            <button id="fk-regen" type="button" class="ghost small">Regenerate</button>
+          </div>
+          <p id="fk-msg" class="footnote" aria-live="polite"></p>
+        </figure>
+        <figure class="card">
+          <figcaption><span class="card-title">What Dummy posts</span></figcaption>
+          <pre id="fk-example" style="overflow:auto;font-size:12px;margin:0"></pre>
+        </figure>
+      </div>
     </section>
 
     <div class="dock">
