@@ -1,0 +1,18 @@
+{
+  "name": "bot-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Group chat for Grok bots and Claude, with a usage dashboard across accounts",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "mock": "BOT_HUB_MOCK=1 node src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.14.0"
+  }
+}
