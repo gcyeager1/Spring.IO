@@ -817,10 +817,12 @@ function renderPreviousBots(u) {
   const rows = ids
     .map((id) => {
       const s = u.byBot[id] ?? blankStats();
-      return `<tr><td>${esc(id)}</td><td class="num">${s.requests}</td><td class="num">${fmtNum(tokensIn(s))} / ${fmtNum(s.output)}</td><td class="num">${fmtUSD(s.cost)}</td></tr>`;
+      const [bid, acct] = id.split("@");
+      const label = acct ? `${bot(bid)?.name ?? bid} (earlier, ${accountName(acct)})` : id;
+      return `<tr><td>${esc(label)}</td><td class="num">${s.requests}</td><td class="num">${fmtNum(tokensIn(s))} / ${fmtNum(s.output)}</td><td class="num">${fmtUSD(s.cost)}</td></tr>`;
     })
     .join("");
-  el.innerHTML = `<h2 class="section">Previous bots</h2><div class="table-wrap"><table><thead><tr><th>Bot (retired id)</th><th class="num">Calls</th><th class="num">Tokens in / out</th><th class="num">Cost</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  el.innerHTML = `<h2 class="section">Previous bots</h2><div class="table-wrap"><table><thead><tr><th>Bot (retired id / earlier account)</th><th class="num">Calls</th><th class="num">Tokens in / out</th><th class="num">Cost</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 // Grok subscription usage reports (ingested via POST /api/plan-usage), separate from Bot Hub chat usage.
