@@ -16,6 +16,7 @@ import { estimateSend } from "./estimate.js";
 import { validateReport } from "../public/planusage.js";
 import { savePlanUsage, getPlanUsage } from "./planusage-store.js";
 import * as ra from "./realagent.js";
+import { ensureTeamBrief, readTeamBrief, saveTeamBrief } from "./team-brief.js";
 import { bridgeView, saveWebhook, clearWebhook, isBridgeBot, BRIDGE_BOTS, validateWebhookUrl } from "./bridge-store.js";
 import { replyTokenMeta, revealGarrettReplyToken, revealLifteasyReplyToken, regenerateGarrettReplyToken, replyRole } from "./reply-tokens.js";
 
@@ -495,6 +496,20 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { bot: bridgeView().find((b) => b.id === id) });
     }
 
+    // Team brief (session only): shared notes sent to real agents; the hub rule is always line 1.
+    if (url.pathname === "/api/team-brief" && req.method === "GET") {
+      res.setHeader("Cache-Control", "no-store");
+      return json(res, 200, { text: readTeamBrief() });
+    }
+    if (url.pathname === "/api/team-brief" && req.method === "PUT") {
+      let body;
+      try { body = await readBody(req); } catch { return json(res, 400, { error: "Invalid JSON" }); }
+      const r = saveTeamBrief(body?.text);
+      if (r.error) return json(res, 400, { error: r.error });
+      console.log("team brief saved");
+      return json(res, 200, { text: r.text });
+    }
+
     // Reply tokens (session only; fetched on click, never in metadata, config or logs).
     if (url.pathname === "/api/reply-tokens" && req.method === "GET") return json(res, 200, replyTokenMeta());
     if (url.pathname === "/api/reply-tokens/lifteasy/reveal" && req.method === "POST") {
@@ -618,6 +633,8 @@ const server = http.createServer(async (req, res) => {
     json(res, 500, { error: err?.message ?? "Server error" });
   }
 });
+
+ensureTeamBrief();
 
 // Resume timers for jobs that were open when the process last stopped.
 expireJobs();

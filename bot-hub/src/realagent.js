@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "./config.js";
 import { lookupWebhook } from "./bridge-store.js";
+import { readTeamBrief } from "./team-brief.js";
 
 // Fixed on purpose: never taken from the client, the environment or the request.
 export const REPLY_URL = "https://bots.ezliftgaragedoorservice.com/api/agent-reply";
@@ -172,6 +173,7 @@ export function buildPayload(job, bot, text, visible) {
     text: trim(text, 4000),
     recent: visible.slice(-10).map((m) => ({ speaker: m.speaker, botId: m.botId ?? null, text: trim(m.text ?? "", 1500) })),
     reply_url: REPLY_URL,
+    team_brief: readTeamBrief().trimEnd(),
   };
 }
 

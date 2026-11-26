@@ -150,6 +150,12 @@
       <div id="bridge-list" class="grid"></div>
       <p id="bridge-msg" class="footnote" aria-live="polite"></p>
 
+      <h2 class="section">Team Brief</h2>
+      <p class="footnote">Shared notes sent to real bots with every wake-up. The first line (hub usage rule) is always kept.</p>
+      <textarea id="tb-text" rows="10" spellcheck="false" style="width:100%;font-family:inherit"></textarea>
+      <div style="display:flex;gap:8px;margin-top:8px"><button id="tb-save" type="button" class="ghost small">Save</button></div>
+      <p id="tb-msg" class="footnote" aria-live="polite"></p>
+
       <h2 class="section">Reply tokens</h2>
       <p class="footnote">Real bots reply via <code>POST /api/agent-reply</code> with a token. Never share it in chat.</p>
       <div class="grid">
