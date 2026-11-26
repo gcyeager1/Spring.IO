@@ -101,21 +101,29 @@ const day = (ts) => new Date(ts).toISOString().slice(0, 10);
  * cover every bot so they can be compared side by side.
  */
 export function summarizeUsage(sinceMs, accounts, bots, botFilter, todayStart = 0) {
+  // A configured bot's rows from a different (older) account, e.g. Nova's Grok-era
+  // calls now that Nova is on the free account, are reported under "bot@account"
+  // so they never count toward the bot's current account.
+  const accountOf = new Map(bots.map((b) => [b.id, b.account]));
+  const botKey = (u) => {
+    const cur = accountOf.get(u.bot);
+    return cur && u.account && u.account !== cur ? `${u.bot}@${u.account}` : u.bot;
+  };
   const inRange = usage.filter((u) => u.ts >= sinceMs);
-  const rows = botFilter ? inRange.filter((u) => u.bot === botFilter) : inRange;
+  const rows = botFilter ? inRange.filter((u) => botKey(u) === botFilter) : inRange;
 
   const total = blank();
   const byDay = {}; // day -> botId -> stats (filtered)
   for (const u of rows) {
     add(total, u);
     const d = (byDay[day(u.ts)] ??= {});
-    add((d[u.bot] ??= blank()), u);
+    add((d[botKey(u)] ??= blank()), u);
   }
 
   const byBot = Object.fromEntries(bots.map((b) => [b.id, { ...blank(), daily: {} }]));
   const byAccount = Object.fromEntries(accounts.map((a) => [a.id, blank()]));
   for (const u of inRange) {
-    const b = (byBot[u.bot] ??= { ...blank(), daily: {} });
+    const b = (byBot[botKey(u)] ??= { ...blank(), daily: {} });
     add(b, u);
     // Daily trend: dollars spent, or API-equivalent value for calls covered by a plan.
     b.daily[day(u.ts)] = (b.daily[day(u.ts)] ?? 0) + (u.plan ? (u.apiValue ?? 0) : (u.cost ?? 0));
@@ -126,7 +134,7 @@ export function summarizeUsage(sinceMs, accounts, bots, botFilter, todayStart = 
   const points = rows.slice(-20000).map((u) => [
     u.ts,
     u.account,
-    u.bot,
+    botKey(u),
     u.cost ?? 0,
     (u.input ?? 0) + (u.cachedInput ?? 0) + (u.cacheWrite ?? 0),
     u.output ?? 0,
@@ -139,7 +147,7 @@ export function summarizeUsage(sinceMs, accounts, bots, botFilter, todayStart = 
   for (const u of usage) {
     const last = { ts: u.ts, ok: u.ok, error: u.error };
     lastByAccount[u.account] = last;
-    lastByBot[u.bot] = last;
+    lastByBot[botKey(u)] = last;
   }
 
   // Spend since the viewer's local midnight, across every bot (for the status strip).

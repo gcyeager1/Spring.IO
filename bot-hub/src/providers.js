@@ -231,7 +231,9 @@ async function callClaudeCode(bot, account, transcript, ctx) {
   };
 }
 
-// ---------- Mock (no keys needed) ----------
+// ---------- Canned replies (no keys, no network, no cost) ----------
+// Used for the per-account "local" provider (always on, even in production)
+// and for global BOT_HUB_MOCK=1 (tests / `npm run mock`).
 const MOCK_LINES = [
   "Interesting point - I'd push on that a bit more.",
   "I agree in part, but the numbers don't quite add up for me.",
@@ -239,12 +241,12 @@ const MOCK_LINES = [
   "Here's another angle worth considering.",
   "Good question. Short answer: it depends on the constraints.",
 ];
-async function callMock(bot, account, transcript) {
+async function callLocal(bot, account, transcript, { mocked = false } = {}) {
   await new Promise((r) => setTimeout(r, 300 + Math.random() * 500));
   const chars = transcript.reduce((n, m) => n + m.text.length, 0);
   return {
-    text: `${MOCK_LINES[Math.floor(Math.random() * MOCK_LINES.length)]} (mock reply from ${bot.name})`,
-    model: `${bot.model} (mock)`,
+    text: `${MOCK_LINES[Math.floor(Math.random() * MOCK_LINES.length)]}`,
+    model: mocked ? `${bot.model} (mock)` : bot.model,
     usage: {
       input: Math.round(chars / 4) + 120,
       cachedInput: Math.round(chars / 8),
@@ -256,8 +258,10 @@ async function callMock(bot, account, transcript) {
 
 export async function callBot(bot, account, transcript, participants, { direct = false } = {}) {
   const ctx = { direct, system: systemPrompt(bot, participants, direct) };
-  if (isMock()) return callMock(bot, account, transcript);
+  if (isMock()) return callLocal(bot, account, transcript, { mocked: true });
   switch (account.provider) {
+    case "local":
+      return callLocal(bot, account, transcript);
     case "xai":
       return callXai(bot, account, transcript, ctx);
     case "anthropic":
@@ -274,7 +278,8 @@ export async function callBot(bot, account, transcript, participants, { direct =
  * the request's prompt (input + cached input) reaches its thresholdTokens, every
  * token in the request is billed at the long-context rates (xAI behaviour).
  */
-export function listPrice(usage, pricing = {}) {
+export function listPrice(usage, pricing = {}, account) {
+  if (account?.provider === "local") return 0; // canned replies have no list price
   const lc = pricing.longContext;
   const prompt = (usage.input ?? 0) + (usage.cachedInput ?? 0);
   const p = lc && prompt >= (lc.thresholdTokens ?? 200_000) ? { ...pricing, ...lc } : pricing;
@@ -289,5 +294,5 @@ export function listPrice(usage, pricing = {}) {
 
 /** What a call actually costs you: nothing extra for calls covered by your plan. */
 export function costOf(usage, account) {
-  return isPlan(account) ? 0 : listPrice(usage, account.pricing);
+  return isPlan(account) ? 0 : listPrice(usage, account.pricing, account);
 }

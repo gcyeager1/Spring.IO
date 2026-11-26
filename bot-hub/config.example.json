@@ -50,6 +50,12 @@
         "cachedInputPerM": 0.2,
         "cacheWritePerM": 5.0
       }
+    },
+    {
+      "id": "free",
+      "name": "Free (no usage)",
+      "provider": "local",
+      "_comment": "Canned replies generated on this server. No API key, no Claude/xAI calls, always $0."
     }
   ],
   "bots": [
@@ -137,6 +143,27 @@
       "model": "default",
       "systemPrompt": "You are Claude, taking part in a group chat with several Grok-based bots and a human. Keep replies short and conversational.",
       "_model": "\"default\" uses Claude Code's default model for your plan. Or use an alias like \"sonnet\", \"opus\" or \"haiku\"."
+    },
+    {
+      "id": "nova",
+      "name": "Nova",
+      "account": "free",
+      "model": "canned",
+      "systemPrompt": "You are Nova, a friendly general-purpose helper. Keep replies short and conversational."
+    },
+    {
+      "id": "rook",
+      "name": "Rook",
+      "account": "free",
+      "model": "canned",
+      "systemPrompt": "You are Rook, a steady, practical helper. Keep replies short and conversational."
+    },
+    {
+      "id": "sage",
+      "name": "Sage",
+      "account": "free",
+      "model": "canned",
+      "systemPrompt": "You are Sage, a thoughtful, reflective helper. Keep replies short and conversational."
     }
   ]
 }

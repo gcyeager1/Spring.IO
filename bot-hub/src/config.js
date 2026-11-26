@@ -39,7 +39,7 @@ const hasLocalLogin = () => fs.existsSync(path.join(os.homedir(), ".claude", ".c
 
 /** Why an account can't make calls right now, or null if it looks ready. */
 export function accountProblem(account) {
-  if (isMock()) return null;
+  if (isMock() || account.provider === "local") return null; // local: canned replies, always ready
   if (account.provider === "claude-code") {
     if (!claudeCodeVersion(account.command)) return "Claude Code not found - install it and log in";
     // Hosted/headless: there's no browser to /login, so the setup-token env var is required.

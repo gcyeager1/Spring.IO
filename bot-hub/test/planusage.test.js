@@ -68,11 +68,13 @@ test("session sees planUsage in /api/usage; old bot ids don't break it", async (
   const u = await (await fetch(s.base + "/api/usage?days=all", { headers: h })).json();
   assert.equal(u.planUsage.lifteasy.plan, "Ultra");
   assert.equal(u.planUsage.garrett, null);
-  assert.equal(u.byBot.nova.requests, 1);
+  // Nova is now a free-account bot: its Grok-era row is split out, not shown as free spend.
+  assert.equal(u.byBot.nova.requests, 0);
+  assert.equal(u.byBot["nova@grok-1"].requests, 1);
   assert.equal((await fetch(s.base + "/api/plan-usage", { headers: h })).status, 200);
   const cfg = await (await fetch(s.base + "/api/config", { headers: h })).json();
-  assert.equal(cfg.bots.length, 12);
-  assert.deepEqual(cfg.accounts.map((a) => a.name), ["Lifteasy Door Services", "garrett yeager", "Claude (your plan)"]);
+  assert.equal(cfg.bots.length, 15);
+  assert.deepEqual(cfg.accounts.map((a) => a.name), ["Lifteasy Door Services", "garrett yeager", "Claude (your plan)", "Free (no usage)"]);
 });
 
 test("ingest is disabled when BOTHUB_INGEST_TOKEN is unset", async () => {
