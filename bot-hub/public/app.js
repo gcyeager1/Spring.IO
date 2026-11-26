@@ -2,6 +2,8 @@
 // status strip and a usage dashboard with per-bot breakdowns.
 // No build step, no dependencies. Charts are hand-built SVG.
 
+import { fmtShare, fmtPercentUsed, fmtResetEastern, fmtAgo as fmtReportAgo, isLeftoverBucket, reportFor } from "/planusage.js";
+
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -66,6 +68,9 @@ const botColor = (id) => {
 };
 const account = (id) => state.config.accounts.find((a) => a.id === id);
 const accountName = (id) => account(id)?.name ?? id;
+// Bot name plus its account, so two bots with the same name stay distinguishable.
+// Retired bot ids (in old usage data but not in config) just show the stored id.
+const botLabel = (id) => (bot(id) ? `${bot(id).name} · ${accountName(bot(id).account)}` : id);
 const blankStats = () => ({ planCalls: 0, apiValue: 0, requests: 0, errors: 0, input: 0, cachedInput: 0, cacheWrite: 0, output: 0, cost: 0, latencyN: 0, latencySum: 0, groupCost: 0, directCost: 0, groupCalls: 0, directCalls: 0, daily: {} });
 const onPlan = (b) => Boolean(account(b.account)?.plan);
 const tokensIn = (s) => (s.input ?? 0) + (s.cachedInput ?? 0) + (s.cacheWrite ?? 0);
@@ -126,7 +131,7 @@ function lastMessageFrom(b) {
   let last = null;
   for (const msgs of state.rooms.values()) {
     for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].speaker === b.name) {
+      if (msgs[i].botId ? msgs[i].botId === b.id : msgs[i].speaker === b.name && (!msgs[i].account || msgs[i].account === b.account)) {
         if (!last || msgs[i].ts > last.ts) last = msgs[i];
         break;
       }
@@ -238,11 +243,12 @@ function renderStatus(u) {
 
 function messageHtml(m) {
   const you = m.speaker === "You";
-  const b = m.botId ? bot(m.botId) : state.config.bots.find((x) => x.name === m.speaker);
+  const b = m.botId ? bot(m.botId) : state.config.bots.find((x) => x.name === m.speaker && (!m.account || x.account === m.account));
   const note = m.note ? ` <span class="note">· ${esc(m.note)}</span>` : "";
-  const av = you ? "" : b ? avatarHtml(b) : `<span class="avatar" style="background:var(--series-other)">!</span>`;
+  const av = you ? "" : b ? avatarHtml(b) : `<span class="avatar" style="background:var(--series-other)">${esc((m.speaker ?? "?").trim()[0]?.toUpperCase() ?? "?")}</span>`;
+  const acct = !you && (m.account || b?.account) ? ` <span class="note">· ${esc(accountName(m.account ?? b.account))}</span>` : "";
   return `<li class="msg ${you ? "you" : ""} ${m.error ? "err" : ""}">${av}<div class="bubble">
-    <div class="who">${esc(m.speaker)}<time datetime="${new Date(m.ts).toISOString()}">${fmtTime(m.ts)}</time>${note}</div><div class="body">${esc(m.text)}</div></div></li>`;
+    <div class="who">${esc(m.speaker)}${acct}<time datetime="${new Date(m.ts).toISOString()}">${fmtTime(m.ts)}</time>${note}</div><div class="body">${esc(m.text)}</div></div></li>`;
 }
 
 function scrollChat() {
@@ -278,12 +284,12 @@ function renderChatHeader() {
     const b = bot(dmBot(room));
     $("#chat-avatar").innerHTML = avatarHtml(b);
     $("#chat-name").textContent = b.name;
-    $("#chat-sub").textContent = `Private chat · ${b.model} on ${accountName(b.account)}`;
-    $("#input").placeholder = `Message ${b.name}… (Enter to send, Shift+Enter for a new line)`;
+    $("#chat-sub").textContent = `${accountName(b.account)} · ${b.model} · Private chat`;
+    $("#input").placeholder = `Message ${b.name} (${accountName(b.account)})… (Enter to send, Shift+Enter for a new line)`;
   } else {
     $("#chat-avatar").innerHTML = "";
     $("#chat-name").textContent = "Group chat";
-    const names = state.config.bots.filter((b) => state.included.has(b.id)).map((b) => b.name);
+    const names = state.config.bots.filter((b) => state.included.has(b.id)).map((b) => `${b.name} (${accountName(b.account)})`);
     $("#chat-sub").textContent = names.length ? names.join(", ") : "No bots selected - tick some in the sidebar";
     $("#input").placeholder = "Message the group… (Enter to send, Shift+Enter for a new line)";
   }
@@ -456,7 +462,7 @@ function renderMeter() {
   $("#m-last").hidden = !last;
   if (last) {
     const diff = last.est ? ((last.actual.cost - last.est) / last.est) * 100 : 0;
-    const where = isDm(last.room) ? botName(dmBot(last.room)) : "group";
+    const where = isDm(last.room) ? botLabel(dmBot(last.room)) : "group";
     const planNote = last.actual.planCalls
       ? ` <span class="m-diff">+ ${last.actual.planCalls} on your plan (≈ ${fmtUSD(last.actual.apiValue)} at API prices)</span>`
       : "";
@@ -472,7 +478,7 @@ function wireMeter() {
     showTip(
       e,
       `<div class="t-head">Estimate by bot</div>${m.perBot
-        .map((r) => tipRow(botColor(r.bot), `${botName(r.bot)} ×${r.calls}`, `${r.plan ? "your plan" : fmtUSD(r.cost)} · ~${fmtNum(r.input)} in / ${fmtNum(r.output)} out`))
+        .map((r) => tipRow(botColor(r.bot), `${botLabel(r.bot)} ×${r.calls}`, `${r.plan ? "your plan" : fmtUSD(r.cost)} · ~${fmtNum(r.input)} in / ${fmtNum(r.output)} out`))
         .join("")}<div class="t-row"><span>Rough guide: ~4 characters per token, replies sized like each bot's recent ones.</span></div>`,
     );
   });
@@ -585,7 +591,7 @@ function renderLine(u) {
           if (pt > t) break;
           v = pv;
         }
-        return tipRow(botColor(sr.b.id), sr.b.name, fmtUSD(v));
+        return tipRow(botColor(sr.b.id), botLabel(sr.b.id), fmtUSD(v));
       })
       .join("");
     showTip(e, `<div class="t-head">${new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>${rows}`);
@@ -626,7 +632,7 @@ function renderTokenBars(u) {
   el.querySelectorAll(".col").forEach((gEl) => {
     const g = groups[Number(gEl.dataset.i)];
     gEl.addEventListener("mousemove", (e) =>
-      showTip(e, `<div class="t-head">${esc(g.b.name)}</div>${tipRow("", "Tokens in", fmtNum(g.tin))}${tipRow("", "Tokens out", fmtNum(g.tout))}`),
+      showTip(e, `<div class="t-head">${esc(botLabel(g.b.id))}</div>${tipRow("", "Tokens in", fmtNum(g.tin))}${tipRow("", "Tokens out", fmtNum(g.tout))}`),
     );
     gEl.addEventListener("mouseleave", hideTip);
   });
@@ -671,7 +677,7 @@ function renderDaily(u) {
       showTip(e, `<div class="t-head">${days[i]} · ${fmtUSD(totals[i])}</div>${bots
         .map((b) => {
           const st = u.byDay[days[i]]?.[b.id];
-          return tipRow(botColor(b.id), b.name, `${fmtUSD(st?.cost ?? 0)} · ${st?.requests ?? 0} calls`);
+          return tipRow(botColor(b.id), botLabel(b.id), `${fmtUSD(st?.cost ?? 0)} · ${st?.requests ?? 0} calls`);
         })
         .join("")}`),
     );
@@ -742,7 +748,7 @@ function renderFilter() {
     `<button type="button" class="chip ${state.botFilter === id ? "on" : ""}" data-bot="${id ?? ""}" role="radio" aria-checked="${state.botFilter === id}">${
       color ? `<span class="dot" style="background:${color}"></span>` : ""
     }${esc(label)}</button>`;
-  $("#bot-filter").innerHTML = chip(null, "All bots") + state.config.bots.map((b) => chip(b.id, b.name, botColor(b.id))).join("");
+  $("#bot-filter").innerHTML = chip(null, "All bots") + state.config.bots.map((b) => chip(b.id, botLabel(b.id), botColor(b.id))).join("");
 }
 
 function renderKpis(u) {
@@ -779,7 +785,7 @@ function renderBotCards(u) {
       const splitHas = plan ? s.requests : s.cost;
       const fmtSplit = (cost, calls) => (plan ? `${calls} calls` : fmtUSD(cost));
       return `<button type="button" class="bot-card ${state.botFilter === b.id ? "on" : ""}" data-bot="${esc(b.id)}"
-          aria-pressed="${state.botFilter === b.id}" title="Show only ${esc(b.name)} in the charts">
+          aria-pressed="${state.botFilter === b.id}" title="Show only ${esc(botLabel(b.id))} in the charts">
         <span class="top">${avatarHtml(b, botState(b))}<span><span class="nm">${esc(b.name)}</span><br><span class="meta">${esc(accountName(b.account))} · ${esc(b.model)}</span></span></span>
         ${plan
           ? `<span class="cost">Your plan<small>≈ ${fmtUSD(s.apiValue)} at API prices</small></span>
@@ -802,6 +808,48 @@ function renderBotCards(u) {
     .join("");
 }
 
+// Bots that appear in old usage data but are no longer in config (e.g. retired ids).
+function renderPreviousBots(u) {
+  const el = $("#prev-bots");
+  const ids = Object.keys(u.byBot ?? {}).filter((id) => !bot(id));
+  el.hidden = !ids.length;
+  if (!ids.length) return;
+  const rows = ids
+    .map((id) => {
+      const s = u.byBot[id] ?? blankStats();
+      return `<tr><td>${esc(id)}</td><td class="num">${s.requests}</td><td class="num">${fmtNum(tokensIn(s))} / ${fmtNum(s.output)}</td><td class="num">${fmtUSD(s.cost)}</td></tr>`;
+    })
+    .join("");
+  el.innerHTML = `<h2 class="section">Previous bots</h2><div class="table-wrap"><table><thead><tr><th>Bot (retired id)</th><th class="num">Calls</th><th class="num">Tokens in / out</th><th class="num">Cost</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+// Grok subscription usage reports (ingested via POST /api/plan-usage), separate from Bot Hub chat usage.
+function renderPlanUsage(u) {
+  const html = [["lifteasy", "grok-1"], ["garrett", "grok-2"]]
+    .map(([key, acctId]) => {
+      const r = reportFor(u.planUsage, key);
+      const label = accountName(acctId);
+      const title = `Grok subscription (${esc(r?.plan ?? "Ultra")} weekly)`;
+      if (!r) return `<figure class="card plan-card"><figcaption><span class="card-title">${title}</span><span class="muted">${esc(label)}</span></figcaption><p class="muted">No usage report yet</p></figure>`;
+      const pct = Math.min(Math.max(r.percentUsed, 0), 100);
+      const bots = (r.bots ?? [])
+        .map((b) => `<li class="${isLeftoverBucket(b.name) ? "leftover muted" : ""}"><span>${esc(b.name)}</span><span class="num">${fmtShare(b.sharePct)}</span></li>`)
+        .join("");
+      return `<figure class="card plan-card">
+        <figcaption><span class="card-title">${title}</span><span class="muted">${esc(label)}</span></figcaption>
+        <div><strong>${esc(r.plan ?? "Plan")}</strong> · ${fmtPercentUsed(r.percentUsed)} used</div>
+        <div class="share" role="img" aria-label="${fmtPercentUsed(r.percentUsed)} used"><span style="width:${pct}%;background:var(--accent)"></span></div>
+        <div class="muted">Resets ${r.resetsAt ? esc(fmtResetEastern(r.resetsAt)) : "unknown"} (Eastern)</div>
+        <div class="muted">${r.onDemand ? esc(r.onDemand) : "No credits info reported"}</div>
+        <div class="muted" title="Each share is a percentage of the ${fmtPercentUsed(r.percentUsed)} already used, not of the whole allowance">Share of used amount</div>
+        <ul class="plan-bots">${bots}</ul>
+        <div class="muted">updated ${esc(fmtReportAgo(r.reportedAt))}</div>
+      </figure>`;
+    })
+    .join("");
+  $("#plan-usage").innerHTML = html;
+}
+
 function renderAccounts(u) {
   const rows = state.config.accounts
     .map((a) => {
@@ -819,7 +867,7 @@ function renderRecent(u) {
     .map(
       (r) => `<tr>
         <td>${fmtTime(r.ts)}</td>
-        <td><span class="dot" style="background:${botColor(r.bot)}"></span> ${esc(botName(r.bot))}</td>
+        <td><span class="dot" style="background:${botColor(r.bot)}"></span> ${esc(botLabel(r.bot))}</td>
         <td>${isDm(r.room) ? "Private" : "Group"}</td>
         <td>${esc(accountName(r.account))}</td>
         <td>${esc(r.model ?? "")}</td>
@@ -837,15 +885,17 @@ function renderRecent(u) {
 }
 
 function renderDashboard(u) {
-  $("#dash-scope").textContent = `· ${state.botFilter ? botName(state.botFilter) : "all bots"} · ${rangeLabel()}`;
+  $("#dash-scope").textContent = `· ${state.botFilter ? botLabel(state.botFilter) : "all bots"} · ${rangeLabel()}`;
   document.querySelectorAll("[data-legend=bots]").forEach((el) => {
     el.innerHTML = shownBots()
-      .map((b) => `<span><span class="dot" style="background:${botColor(b.id)}"></span>${esc(b.name)}</span>`)
+      .map((b) => `<span><span class="dot" style="background:${botColor(b.id)}"></span>${esc(botLabel(b.id))}</span>`)
       .join("");
   });
   renderFilter();
+  renderPlanUsage(u);
   renderKpis(u);
   renderBotCards(u);
+  renderPreviousBots(u);
   renderLine(u);
   renderTokenBars(u);
   renderDaily(u);

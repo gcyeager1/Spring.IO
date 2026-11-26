@@ -6,7 +6,7 @@
   "accounts": [
     {
       "id": "grok-1",
-      "name": "Grok account 1",
+      "name": "Lifteasy Door Services",
       "provider": "xai",
       "apiKeyEnv": "XAI_API_KEY_1",
       "pricing": {
@@ -23,7 +23,7 @@
     },
     {
       "id": "grok-2",
-      "name": "Grok account 2",
+      "name": "garrett yeager",
       "provider": "xai",
       "apiKeyEnv": "XAI_API_KEY_2",
       "pricing": {
@@ -36,7 +36,8 @@
           "cachedInputPerM": 1.0,
           "outputPerM": 12.0
         }
-      }
+      },
+      "_comment": "Account email: gcyeager@gmail.com (the visible label is \"garrett yeager\")."
     },
     {
       "id": "claude",
@@ -53,25 +54,81 @@
   ],
   "bots": [
     {
-      "id": "nova",
-      "name": "Nova",
+      "id": "asschub",
+      "name": "Asschub",
       "account": "grok-1",
       "model": "grok-4.7",
-      "systemPrompt": "You are Nova, an upbeat researcher. Keep replies short and conversational."
+      "systemPrompt": "You are Asschub, a helpful assistant for the Lifteasy Door Services team. Keep replies short and conversational."
     },
     {
-      "id": "rook",
-      "name": "Rook",
+      "id": "leads-lifteasy",
+      "name": "Leads",
+      "account": "grok-1",
+      "model": "grok-4.7",
+      "systemPrompt": "You are Leads, a sales-leads helper for Lifteasy Door Services. Keep replies short and conversational."
+    },
+    {
+      "id": "addy",
+      "name": "Addy",
+      "account": "grok-1",
+      "model": "grok-4.7",
+      "systemPrompt": "You are Addy, a helpful assistant focused on addresses and scheduling details. Keep replies short and conversational."
+    },
+    {
+      "id": "crm",
+      "name": "Crm",
+      "account": "grok-1",
+      "model": "grok-4.7",
+      "systemPrompt": "You are Crm, a CRM helper that keeps customer notes and follow-ups straight. Keep replies short and conversational."
+    },
+    {
+      "id": "usage-bot",
+      "name": "Usage",
+      "account": "grok-1",
+      "model": "grok-4.7",
+      "systemPrompt": "You are Usage, a helper that answers questions about usage and costs. Keep replies short and conversational."
+    },
+    {
+      "id": "dummy",
+      "name": "Dummy",
       "account": "grok-2",
       "model": "grok-4.7",
-      "systemPrompt": "You are Rook, a skeptical critic who pokes holes in ideas. Keep replies short."
+      "systemPrompt": "You are Dummy, a general-purpose test assistant. Keep replies short and conversational."
     },
     {
-      "id": "sage",
-      "name": "Sage",
-      "account": "grok-1",
+      "id": "crm-builder",
+      "name": "CRM Builder",
+      "account": "grok-2",
       "model": "grok-4.7",
-      "systemPrompt": "You are Sage, a calm summarizer who pulls the group toward conclusions. Keep replies short."
+      "systemPrompt": "You are CRM Builder, a helper for designing and building CRM workflows. Keep replies short and conversational."
+    },
+    {
+      "id": "leads-garrett",
+      "name": "Leads",
+      "account": "grok-2",
+      "model": "grok-4.7",
+      "systemPrompt": "You are Leads, a sales-leads helper. Keep replies short and conversational."
+    },
+    {
+      "id": "ads",
+      "name": "Ads",
+      "account": "grok-2",
+      "model": "grok-4.7",
+      "systemPrompt": "You are Ads, a helper for drafting and reviewing ads. Keep replies short and conversational."
+    },
+    {
+      "id": "socials",
+      "name": "Socials",
+      "account": "grok-2",
+      "model": "grok-4.7",
+      "systemPrompt": "You are Socials, a helper for social media posts and replies. Keep replies short and conversational."
+    },
+    {
+      "id": "pawn",
+      "name": "Pawn",
+      "account": "grok-2",
+      "model": "grok-4.7",
+      "systemPrompt": "You are Pawn, a helper for pawn-shop questions and pricing. Keep replies short and conversational."
     },
     {
       "id": "claude",

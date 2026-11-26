@@ -7,8 +7,9 @@ import { fileURLToPath } from "node:url";
 const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/server.js");
 
 /** Start the real server in mock mode on a random port with a temp DATA_DIR. */
-export async function startServer(env = {}) {
+export async function startServer(env = {}, seed) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bothub-test-"));
+  if (seed) seed(dataDir);
   const port = 20000 + Math.floor(Math.random() * 20000);
   const child = spawn(process.execPath, [SERVER], {
     env: {

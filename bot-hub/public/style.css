@@ -282,3 +282,9 @@ td.err { color: var(--bad); }
 .m-diff { color: var(--text-3); }
 @media (max-width: 860px) { .dock { position: sticky; bottom: 0; z-index: 3; } .dock .composer { position: static; } }
 .kpi .note { color: var(--text-3); font-size: 11px; }
+
+.plan-usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.plan-card { display: flex; flex-direction: column; gap: 6px; }
+.plan-bots { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.plan-bots li { display: flex; justify-content: space-between; gap: 8px; }
+.plan-bots li.leftover { font-style: italic; }
