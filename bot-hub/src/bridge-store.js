@@ -104,3 +104,22 @@ export function clearWebhook(botId) {
   writeAll(all);
   return { ok: true };
 }
+
+/** Where the effective webhook comes from: "volume", "env" or "none". */
+export function sourceOf(botId) {
+  const v = volumeEntry(botId);
+  if (v.url && v.key) return "volume";
+  const e = envEntry(botId);
+  return e.url && e.key ? "env" : "none";
+}
+
+/** Log-safe label for a webhook URL: host + last 6 chars of the path ("host/…abc123"). Never the full URL. */
+export function urlLabel(raw) {
+  try {
+    const u = new URL(String(raw));
+    const tail = u.pathname.replace(/\/+$/, "").slice(-6);
+    return tail ? `${u.host}/…${tail}` : u.host;
+  } catch {
+    return "invalid-url";
+  }
+}
