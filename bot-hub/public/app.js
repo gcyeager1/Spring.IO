@@ -1,5 +1,5 @@
-// Bot Hub front end: sidebar of bots, group chat, private chats with each bot,
-// status strip and a usage dashboard with per-bot breakdowns.
+// Bot Hub front end: phone-first chat with a menu sheet, a compact plan-usage row,
+// private chats with each bot and a usage details page.
 // No build step, no dependencies. Charts are hand-built SVG.
 
 import { fmtShare, fmtPercentUsed, fmtResetEastern, fmtAgo as fmtReportAgo, isLeftoverBucket, reportFor, poolSlices, pieSvg, sliceColor, fmtPoolShare, EMPTY_PLAN_TEXT, claudeWindows, claudeSlices, fmtResetIn } from "/planusage.js";
@@ -88,11 +88,17 @@ async function api(path, opts = {}) {
   if (!res.ok) throw new Error(data.error ?? res.statusText);
   return data;
 }
-const setStatus = (text) => ($("#status").textContent = text);
+const setStatus = (text) => ($("#note").textContent = text);
 function refreshStatusText() {
-  if (!state.running.size) return setStatus("Idle");
+  const running = state.running.size > 0;
+  $("#stopbar").hidden = !running;
+  if (!running) {
+    $("#status").textContent = "";
+    return setStatus("");
+  }
   const names = [...state.running].map((r) => (isDm(r) ? botName(dmBot(r)) : "Group"));
-  setStatus(`Replying: ${names.join(", ")}…`);
+  $("#status").textContent = `Replying: ${names.join(", ")}…`;
+  setStatus("");
 }
 
 // ---------- shared tooltip ----------
@@ -143,58 +149,79 @@ function lastMessageFrom(b) {
 
 const unreadBadge = (room) => (state.unread[room] ? `<span class="unread">${state.unread[room]}</span>` : "");
 
+function roomTitle(view) {
+  if (view === "dash") return "Usage details";
+  if (view === "settings") return "Settings";
+  if (isDm(view)) return botName(dmBot(view));
+  return "Group chat";
+}
+
+// Menu rooms list + the group bot checklist. Name kept so existing callers keep working.
 function renderSidebar() {
+  const row = (view, label, extra = "") =>
+    `<button type="button" class="sheet-row ${state.view === view ? "on" : ""}" data-room="${esc(view)}">${extra}<span class="grow">${label}</span>${unreadBadge(view)}</button>`;
+  $("#room-list").innerHTML =
+    row("group", "Group chat") +
+    state.config.bots
+      .map((b) => row(`dm:${b.id}`, `${esc(b.name)} <small>${esc(accountName(b.account))}</small>`, avatarHtml(b, botState(b))))
+      .join("");
   $("#bot-list").innerHTML = state.config.bots
-    .map((b) => {
-      const last = lastMessageFrom(b);
-      const inGroup = state.included.has(b.id);
-      const active = state.view === `dm:${b.id}`;
-      return `<li class="bot ${active ? "active" : ""} ${inGroup ? "" : "off"}" data-id="${esc(b.id)}" tabindex="0"
-          title="Chat privately with ${esc(b.name)} (${esc(b.model)} on ${esc(accountName(b.account))})">
-        <input type="checkbox" class="bot-check" data-id="${esc(b.id)}" ${inGroup ? "checked" : ""}
-          aria-label="Include ${esc(b.name)} in the group chat" title="Include in the group chat" />
-        ${avatarHtml(b, botState(b))}
-        <span class="bot-text">
-          <span class="bot-name"><span>${esc(b.name)}${realBadge(b)}</span>${unreadBadge(`dm:${b.id}`)}<small>${last ? fmtTime(last.ts) : ""}</small></span>
-          <span class="bot-role">${esc(accountName(b.account))} · ${esc(b.model)}</span>
-          <span class="bot-preview">${esc(last ? last.text : "No messages yet")}</span>
-        </span>
-      </li>`;
-    })
+    .map(
+      (b) => `<div class="check-row">
+        <input type="checkbox" class="bot-check" id="bc-${esc(b.id)}" data-id="${esc(b.id)}" ${state.included.has(b.id) ? "checked" : ""} />
+        <label for="bc-${esc(b.id)}"><span>${esc(b.name)}${realBadge(b)}</span><small>${esc(accountName(b.account))} · ${esc(b.model)}</small></label>
+      </div>`,
+    )
     .join("");
-  const g = document.querySelector('[data-unread="group"]');
-  g.hidden = !state.unread.group;
-  g.textContent = state.unread.group ?? "";
-  document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("on", n.dataset.view === state.view));
+  const total = Object.values(state.unread).reduce((n, c) => n + c, 0);
+  $("#menu-unread").hidden = !total;
+  $("#menu-unread").textContent = total || "";
+  $("#bots-btn").textContent = `Bots ${state.included.size}/${state.config.bots.length} ▾`;
+  $("#theme-label").textContent = document.documentElement.dataset.theme === "light" ? "Light" : "Dark";
+}
+
+function openSheet(id) {
+  closeSheets();
+  $("#scrim").hidden = false;
+  $(id).hidden = false;
+}
+function closeSheets() {
+  $("#scrim").hidden = true;
+  $("#menu-sheet").hidden = true;
+  $("#bots-sheet").hidden = true;
 }
 
 function wireSidebar() {
+  $("#menu-btn").addEventListener("click", () => openSheet("#menu-sheet"));
+  $("#bots-btn").addEventListener("click", () => openSheet("#bots-sheet"));
+  $("#scrim").addEventListener("click", closeSheets);
+  addEventListener("keydown", (e) => e.key === "Escape" && closeSheets());
   $("#bot-list").addEventListener("change", (e) => {
     const cb = e.target.closest(".bot-check");
     if (!cb) return;
     cb.checked ? state.included.add(cb.dataset.id) : state.included.delete(cb.dataset.id);
     store.set("participants", [...state.included]);
     renderSidebar();
-    if (state.view === "group") renderChatHeader();
     scheduleEstimate(0);
   });
-  $("#bot-list").addEventListener("click", (e) => {
-    if (e.target.closest(".bot-check")) return;
-    const li = e.target.closest(".bot");
-    if (li) setView(`dm:${li.dataset.id}`);
+  $("#room-list").addEventListener("click", (e) => {
+    const r = e.target.closest("[data-room]");
+    if (!r) return;
+    closeSheets();
+    setView(r.dataset.room);
   });
-  $("#bot-list").addEventListener("keydown", (e) => {
-    const li = e.target.closest(".bot");
-    if (li && e.target === li && (e.key === "Enter" || e.key === " ")) {
-      e.preventDefault();
-      setView(`dm:${li.dataset.id}`);
-    }
+  $("#menu-sheet").addEventListener("click", (e) => {
+    const m = e.target.closest("[data-menu]");
+    if (!m) return;
+    closeSheets();
+    setView(m.dataset.menu);
   });
-  document.querySelectorAll(".nav-item").forEach((btn) => btn.addEventListener("click", () => setView(btn.dataset.view)));
   $("#theme-btn").addEventListener("click", () => {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
     store.set("theme", next);
+    renderSidebar();
+    if (state.usage) renderUsageRow(state.usage);
   });
 }
 
@@ -206,6 +233,8 @@ async function setView(view) {
   $("#view-chat").hidden = !chat;
   $("#view-dash").hidden = view !== "dash";
   $("#view-settings").hidden = view !== "settings";
+  $("#dock").hidden = !chat;
+  $("#chat-name").textContent = roomTitle(view);
   if (view === "settings") { loadFeedKeys(); loadBridge(); loadReplyTokens(); loadTeamBrief(); }
   if (chat) {
     delete state.unread[view];
@@ -216,6 +245,8 @@ async function setView(view) {
   }
   renderSidebar();
   scheduleEstimate(0);
+  const v = $(`#view-${chat ? "chat" : view}`);
+  if (!chat) v.scrollTop = 0;
 }
 
 // ======================= Settings: usage feed keys =======================
@@ -412,28 +443,81 @@ $("#tb-save").addEventListener("click", async () => {
   } catch (e) { $("#tb-msg").textContent = e.message; }
 });
 
-// ======================= Status strip =======================
+// ======================= Usage row (compact donuts under the header) =======================
 
-function renderStatus(u) {
-  $("#pills").innerHTML = state.config.accounts
-    .map((a) => {
-      const last = u.lastByAccount[a.id];
-      let cls = "idle";
-      let info = "ready";
-      if (a.problem) {
-        cls = "bad";
-        info = a.problem;
-      } else if (last && !last.ok) {
-        cls = "bad";
-        info = `last call failed · ${fmtAgo(last.ts)}`;
-      } else if (last) {
-        cls = "good";
-        info = `ok · ${fmtAgo(last.ts)}`;
-      }
-      return `<span class="pill ${cls}" title="${esc(last?.error ?? "")}"><span class="dot"></span>${esc(a.name)} <span class="muted">${esc(info)}${a.plan ? " · your plan" : ""}</span></span>`;
-    })
-    .join("");
-  $("#today").innerHTML = `Today <strong>${fmtUSD(u.today.cost)}</strong> · ${u.today.calls} calls`;
+const USAGE_OPEN_KEY = "usageOpen";
+const donutClass = (p) => (p >= 90 ? "bad" : p >= 70 ? "warn" : "ok");
+function donutHtml(pct) {
+  const r = 16, c = 2 * Math.PI * r;
+  const has = Number.isFinite(pct);
+  const p = has ? Math.min(Math.max(pct, 0), 100) : 0;
+  const label = has ? `${Math.round(pct)}%` : "–";
+  return `<span class="u-donut"><svg viewBox="0 0 36 36" aria-hidden="true"><circle class="ring-bg" cx="18" cy="18" r="${r}"/>${
+    has ? `<circle class="ring ${donutClass(pct)}" cx="18" cy="18" r="${r}" stroke-dasharray="${((p / 100) * c).toFixed(2)} ${c.toFixed(2)}"/>` : ""
+  }</svg><span class="u-pct">${label}</span></span>`;
+}
+
+function usageSummary(u) {
+  const g = (key) => {
+    const r = reportFor(u.planUsage, key);
+    return r && Number.isFinite(Number(r.percentUsed)) ? Number(r.percentUsed) : NaN;
+  };
+  const weekly = claudeWindows(u.planUsage?.claude).find((w) => w.key === "seven_day");
+  return [
+    { id: "lifteasy", name: "Lifteasy", pct: g("lifteasy") },
+    { id: "garrett", name: "garrett", pct: g("garrett") },
+    { id: "claude", name: "Claude", pct: weekly ? weekly.usedPct : NaN },
+  ];
+}
+
+function usageDetailHtml(u) {
+  const out = [];
+  for (const [key, acctId, title] of [["lifteasy", "grok-1", "Lifteasy"], ["garrett", "grok-2", "garrett"]]) {
+    const r = reportFor(u.planUsage, key);
+    if (!r) {
+      out.push(`<div class="u-line"><b>${esc(title)}</b><span>${EMPTY_PLAN_TEXT}</span></div>`);
+      continue;
+    }
+    const top = poolSlices(r).slices.filter((s) => !s.remaining && s.pct > 0).sort((a, b) => b.pct - a.pct).slice(0, 3);
+    const bits = [
+      `${esc(r.plan ?? "Plan")} · ${esc(fmtPercentUsed(r.percentUsed))} used`,
+      r.resetsAt ? `Resets ${esc(fmtResetEastern(r.resetsAt))}` : "",
+      r.onDemand ? esc(r.onDemand) : "",
+      top.length ? `Top: ${top.map((s) => `${esc(s.name)} ${fmtPoolShare(s.pct)}`).join(", ")}` : "",
+    ].filter(Boolean);
+    out.push(`<div class="u-line"><b>${esc(title)}</b>${bits.map((t) => `<span>${t}</span>`).join("")}</div>`);
+  }
+  const wins = claudeWindows(u.planUsage?.claude);
+  const cl = u.planUsage?.claude;
+  const lines = wins.length
+    ? wins.map((w) => `<span>${esc(w.label)} · ${esc(fmtPercentUsed(w.usedPct))} used${w.reset ? " (reset)" : ` · Resets ${esc(fmtResetEastern(w.resetsAt))}`}</span>`).join("")
+    : `<span>${EMPTY_PLAN_TEXT}</span>`;
+  out.push(`<div class="u-line"><b>Claude</b>${lines}${cl?.updatedAt ? `<span>Updated ${esc(fmtReportAgo(cl.updatedAt))}</span>` : ""}</div>
+    <div class="u-actions"><button type="button" class="ghost small claude-refresh" title="Refresh Claude usage" aria-label="Refresh Claude usage">↻ Refresh Claude</button><span class="u-msg" aria-live="polite"></span></div>`);
+  return out.join("");
+}
+
+function renderUsageRow(u) {
+  const open = store.get(USAGE_OPEN_KEY, false);
+  $("#usage-toggle").innerHTML =
+    usageSummary(u)
+      .map((x) => `<span class="u-item" title="${esc(x.name)} weekly plan used">${donutHtml(x.pct)}<span class="u-name">${esc(x.name)}</span></span>`)
+      .join("") + `<span class="u-chev" aria-hidden="true">${open ? "▴" : "▾"}</span>`;
+  $("#usage-toggle").setAttribute("aria-expanded", String(open));
+  const d = $("#usage-detail");
+  d.hidden = !open;
+  if (open) {
+    const msg = d.querySelector(".u-msg")?.textContent ?? "";
+    d.innerHTML = usageDetailHtml(u);
+    d.querySelector(".u-msg").textContent = msg;
+  }
+}
+
+function wireUsageRow() {
+  $("#usage-toggle").addEventListener("click", () => {
+    store.set(USAGE_OPEN_KEY, !store.get(USAGE_OPEN_KEY, false));
+    if (state.usage) renderUsageRow(state.usage);
+  });
 }
 
 // ======================= Chat (group or private) =======================
@@ -441,12 +525,12 @@ function renderStatus(u) {
 function messageHtml(m) {
   const you = m.speaker === "You";
   const b = m.botId ? bot(m.botId) : state.config.bots.find((x) => x.name === m.speaker && (!m.account || x.account === m.account));
-  const note = m.note ? ` <span class="note">· ${esc(m.note)}</span>` : "";
-  const av = you ? "" : b ? avatarHtml(b) : `<span class="avatar" style="background:var(--series-other)">${esc((m.speaker ?? "?").trim()[0]?.toUpperCase() ?? "?")}</span>`;
-  const acct = !you && (m.account || b?.account) ? ` <span class="note">· ${esc(accountName(m.account ?? b.account))}</span>` : "";
   if (m.system) return `<li class="msg sys"><div class="bubble"><div class="body">${esc(m.text)}</div></div></li>`;
-  return `<li class="msg ${you ? "you" : ""} ${m.error ? "err" : ""}">${av}<div class="bubble">
-    <div class="who">${esc(m.speaker)}${acct}<time datetime="${new Date(m.ts).toISOString()}">${fmtTime(m.ts)}</time>${note}</div><div class="body">${esc(m.text)}</div></div></li>`;
+  const note = m.note ? `<span class="note">· ${esc(m.note)}</span>` : "";
+  const acct = !you && (m.account || b?.account) ? `<span class="note">· ${esc(accountName(m.account ?? b.account))}</span>` : "";
+  return `<li class="msg ${you ? "you" : ""} ${m.error ? "err" : ""}">
+    <div class="who"><span class="name">${esc(m.speaker)}</span>${acct}<time datetime="${new Date(m.ts).toISOString()}">${fmtTime(m.ts)}</time>${note}</div>
+    <div class="bubble"><div class="body">${esc(m.text)}</div></div></li>`;
 }
 
 function scrollChat() {
@@ -454,46 +538,17 @@ function scrollChat() {
   v.scrollTop = v.scrollHeight;
 }
 
-function renderChatStats() {
-  const room = chatRoom();
-  const el = $("#chat-stats");
-  if (!room || !isDm(room) || !state.usage) {
-    el.hidden = true;
-    return;
-  }
-  const s = state.usage.byBot[dmBot(room)] ?? blankStats();
-  el.hidden = false;
-  const costCell = onPlan(bot(dmBot(room)))
-    ? `<span>Cost <strong>on your plan</strong> (≈ ${fmtUSD(s.apiValue)} at API prices)</span>`
-    : `<span>Cost <strong>${fmtUSD(s.cost)}</strong></span>`;
-  el.innerHTML = `${costCell}
-    <span>Calls <strong>${s.requests}</strong></span>
-    <span>Tokens <strong>${fmtNum(tokensIn(s))} in / ${fmtNum(s.output)} out</strong></span>
-    <span>Avg reply <strong>${fmtSecs(avgLatency(s))}</strong></span>
-    ${onPlan(bot(dmBot(room)))
-      ? `<span>Private chat <strong>${s.directCalls}</strong> calls · group <strong>${s.groupCalls}</strong></span>`
-      : `<span>Private chat <strong>${fmtUSD(s.directCost)}</strong> · group <strong>${fmtUSD(s.groupCost)}</strong></span>`}
-    <span>${esc(rangeLabel())}</span>`;
-}
-
 function renderChatHeader() {
   const room = chatRoom();
   if (isDm(room)) {
     const b = bot(dmBot(room));
-    $("#chat-avatar").innerHTML = avatarHtml(b);
-    $("#chat-name").innerHTML = `${esc(b.name)}${realBadge(b)}`;
-    $("#chat-sub").textContent = `${accountName(b.account)} · ${b.model} · Private chat`;
-    $("#input").placeholder = `Message ${b.name} (${accountName(b.account)})… (Enter to send, Shift+Enter for a new line)`;
+    $("#input").placeholder = `Message ${b.name}…`;
   } else {
-    $("#chat-avatar").innerHTML = "";
-    $("#chat-name").textContent = "Group chat";
-    const names = state.config.bots.filter((b) => state.included.has(b.id)).map((b) => `${b.name} (${accountName(b.account)})`);
-    $("#chat-sub").textContent = names.length ? names.join(", ") : "No bots selected - tick some in the sidebar";
-    $("#input").placeholder = "Message the group… (Enter to send, Shift+Enter for a new line)";
+    $("#input").placeholder = state.included.size ? "Message the group…" : "Pick bots (Bots ▾), then message…";
   }
-  $("#chat-usage-btn").hidden = !isDm(room);
+  $("#chat-name").textContent = roomTitle(state.view);
   document.querySelectorAll(".group-only").forEach((el) => (el.hidden = isDm(room)));
-  renderChatStats();
+  $("#continue-btn").hidden = isDm(room);
   syncButtons();
 }
 
@@ -503,7 +558,7 @@ function renderChat() {
   const list = state.rooms.get(room) ?? [];
   const empty = isDm(room)
     ? `Start a private conversation with ${esc(botName(dmBot(room)))}.`
-    : "Tick bots in the sidebar, then say something. They'll take turns replying.";
+    : "Say something. The bots you picked (Bots ▾) will take turns replying.";
   $("#messages").innerHTML = list.length ? list.map(messageHtml).join("") : `<li class="empty">${empty}</li>`;
   const typingBot = state.typing.get(room);
   $("#typing").hidden = !typingBot;
@@ -534,12 +589,13 @@ function syncButtons() {
   $("#continue-btn").disabled = Boolean(busy);
   $("#clear-btn").disabled = Boolean(busy);
   $("#stop-btn").disabled = !state.running.size;
+  $("#stopbar").hidden = !state.running.size;
 }
 
 async function send(text) {
   const room = chatRoom() ?? "group";
   const participants = state.config.bots.filter((b) => state.included.has(b.id)).map((b) => b.id);
-  if (room === "group" && !participants.length) return setStatus("Tick at least one bot in the sidebar for the group chat.");
+  if (room === "group" && !participants.length) return setStatus("Pick at least one bot (Bots ▾) for the group chat.");
   clearTimeout(estimateTimer);
   const est = await requestEstimate(); // fresh, so it matches exactly what's being sent
   if (est?.project.budget && est.project.after > est.project.budget) {
@@ -550,9 +606,10 @@ async function send(text) {
     await api("/api/messages", { method: "POST", body: { room, text, participants, rounds: Number($("#rounds").value) || 1 } });
     state.pendingEstimate[room] = est?.message.cost ?? 0;
     $("#input").value = "";
+    closeSheets();
     scheduleEstimate(0);
     autosize();
-    if (state.view === "dash") setView(room);
+    if (state.view !== room) setView(room);
   } catch (e) {
     setStatus(e.message);
   }
@@ -577,7 +634,10 @@ function wireChat() {
       $("#composer").requestSubmit();
     }
   });
-  $("#continue-btn").addEventListener("click", () => send(""));
+  $("#continue-btn").addEventListener("click", () => {
+    closeSheets();
+    send("");
+  });
   $("#stop-btn").addEventListener("click", () => {
     api("/api/stop", { method: "POST", body: {} });
     setStatus("Pausing after the current replies…");
@@ -585,16 +645,13 @@ function wireChat() {
   $("#clear-btn").addEventListener("click", async () => {
     const room = chatRoom();
     const label = isDm(room) ? `your private chat with ${botName(dmBot(room))}` : "the group chat";
+    closeSheets();
     if (!confirm(`Clear ${label}? Usage stats are kept.`)) return;
     try {
       await api(`/api/messages?room=${encodeURIComponent(room)}`, { method: "DELETE" });
     } catch (e) {
       setStatus(e.message);
     }
-  });
-  $("#chat-usage-btn").addEventListener("click", () => {
-    setBotFilter(dmBot(chatRoom()));
-    setView("dash");
   });
 }
 
@@ -630,63 +687,31 @@ async function requestEstimate() {
   }
 }
 
+// Estimated share of the weekly plan this send would use. Grok plan bots only: the rate is
+// calibrated from this week's reported % used against tokens spent on that account.
+function estimatePlanPct(est) {
+  const u = state.usage;
+  if (!est?.message?.calls || !u || state.days !== "7") return null;
+  const byAcct = { "grok-1": "lifteasy", "grok-2": "garrett" };
+  let pct = 0;
+  for (const r of est.message.perBot ?? []) {
+    if (!r.plan) continue;
+    const acct = bot(r.bot)?.account;
+    const report = reportFor(u.planUsage, byAcct[acct]);
+    const s = u.byAccount?.[acct];
+    const tok = s ? tokensIn(s) + (s.output ?? 0) : 0;
+    if (!report || !(Number(report.percentUsed) > 0) || !(tok > 0)) continue;
+    pct += (Number(report.percentUsed) / tok) * (r.input + r.output);
+  }
+  return pct > 0 ? pct : null;
+}
+
 function renderMeter() {
-  const est = state.estimate;
-  if (!est) return;
-  const m = est.message;
-  $("#m-chip").textContent = m.calls ? `Est. ~${fmtUSD(m.cost)}` : "Est. –";
-  const room = meterRoom();
-  const typed = $("#input").value.trim().length > 0;
-  const label = typed ? "This message" : isDm(room) ? "Next reply" : "Let them talk";
-  const replies = `${m.calls} repl${m.calls === 1 ? "y" : "ies"}${m.rounds > 1 ? ` over ${m.rounds} rounds` : ""}`;
-  const plan = m.planCalls ? ` <span class="m-diff">(${m.planCalls === m.calls ? "all" : m.planCalls} on your Claude plan)</span>` : "";
-  $("#m-msg").innerHTML = m.calls
-    ? `<span class="m-label">${label}</span> ≈ <strong>${fmtUSD(m.cost)}</strong> · ${replies}${plan} · ~${fmtNum(m.input)} in / ${fmtNum(m.output)} out`
-    : `<span class="m-label">${label}</span> no bots selected`;
-
-  const p = est.project;
-  let budget = "";
-  if (p.budget) {
-    const pctSpent = Math.min(100, (p.spent / p.budget) * 100);
-    const pctNext = Math.max(0, Math.min(100, (p.after / p.budget) * 100) - pctSpent);
-    const level = p.after > p.budget ? "over" : p.after > p.budget * 0.9 ? "warn" : "";
-    const flag = level === "over" ? `<span class="m-flag over">over budget</span>` : level === "warn" ? `<span class="m-flag warn">near budget</span>` : "";
-    budget = `<span class="m-bar ${level}" title="${fmtUSD(p.spent)} spent + ≈${fmtUSD(p.after - p.spent)} for this send, of ${fmtUSD(p.budget)}">
-      <span class="spent" style="width:${pctSpent}%"></span><span class="next" style="width:${pctNext}%"></span></span>
-      ${Math.round((p.after / p.budget) * 100)}% of ${fmtUSD(p.budget)} ${flag}`;
-  }
-  $("#m-proj").innerHTML = `<span class="m-label">Project</span> <strong>${fmtUSD(p.spent)}</strong> spent → ≈ <strong>${fmtUSD(p.after)}</strong> after ${budget}`;
-
-  const last = state.lastSend;
-  $("#m-last").hidden = !last;
-  if (last) {
-    const diff = last.est ? ((last.actual.cost - last.est) / last.est) * 100 : 0;
-    const where = isDm(last.room) ? botLabel(dmBot(last.room)) : "group";
-    const planNote = last.actual.planCalls
-      ? ` <span class="m-diff">+ ${last.actual.planCalls} on your plan (≈ ${fmtUSD(last.actual.apiValue)} at API prices)</span>`
-      : "";
-    $("#m-last").innerHTML = `<span class="m-label">Last send (${esc(where)})</span> est ${fmtUSD(last.est)} → actual <strong>${fmtUSD(last.actual.cost)}</strong>${planNote}
-      ${last.est ? `<span class="m-diff">(${diff >= 0 ? "+" : ""}${diff.toFixed(0)}%)</span>` : ""}`;
-  }
+  const pct = estimatePlanPct(state.estimate);
+  $("#m-chip").textContent = pct === null ? "" : `≈${pct < 0.1 ? "<0.1" : +pct.toFixed(1)}% of weekly plan`;
 }
 
 function wireMeter() {
-  $("#m-chip").addEventListener("click", () => {
-    const d = $("#m-detail");
-    d.hidden = !d.hidden;
-    $("#m-chip").setAttribute("aria-expanded", String(!d.hidden));
-  });
-  $("#m-msg").addEventListener("mousemove", (e) => {
-    const m = state.estimate?.message;
-    if (!m?.perBot?.length) return;
-    showTip(
-      e,
-      `<div class="t-head">Estimate by bot</div>${m.perBot
-        .map((r) => tipRow(botColor(r.bot), `${botLabel(r.bot)} ×${r.calls}`, `${r.plan ? "your plan" : fmtUSD(r.cost)} · ~${fmtNum(r.input)} in / ${fmtNum(r.output)} out`))
-        .join("")}<div class="t-row"><span>Rough guide: ~4 characters per token, replies sized like each bot's recent ones.</span></div>`,
-    );
-  });
-  $("#m-msg").addEventListener("mouseleave", hideTip);
   $("#input").addEventListener("input", () => scheduleEstimate());
   $("#rounds").addEventListener("input", () => scheduleEstimate(0));
 }
@@ -1044,7 +1069,7 @@ function renderPlanUsage(u) {
       return `<figure class="card plan-card">
         <figcaption><span class="card-title">${title}</span><span class="muted">${esc(r.plan ?? "")} · ${fmtPercentUsed(r.percentUsed)} used</span></figcaption>
         <div class="plan-body">${pieSvg(slices)}<ul class="plan-bots">${legend}</ul></div>
-        <div class="muted small">Resets ${r.resetsAt ? esc(fmtResetEastern(r.resetsAt)) : "unknown"} ET</div>
+        <div class="muted small">${r.resetsAt ? `Resets ${esc(fmtResetEastern(r.resetsAt))}` : "Resets unknown"}</div>
         <div class="muted small">${extra}</div>
       </figure>`;
     })
@@ -1070,7 +1095,15 @@ document.addEventListener("click", async (e) => {
   const b = e.target.closest?.(".claude-refresh");
   if (!b || b.disabled) return;
   b.disabled = true;
-  try { await fetch("/api/claude-usage/refresh", { method: "POST" }); } catch {}
+  const msg = b.closest(".usage-detail, .claude-card")?.querySelector(".u-msg");
+  if (msg) msg.textContent = "Refreshing…";
+  try {
+    const res = await fetch("/api/claude-usage/refresh", { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (msg) msg.textContent = res.ok ? (data.ok === false ? "Couldn't read Claude usage." : "Updated.") : (data.error ?? "Refresh failed.");
+  } catch {
+    if (msg) msg.textContent = "Refresh failed.";
+  }
   b.disabled = false;
 });
 
@@ -1138,10 +1171,10 @@ async function refreshUsage() {
   try {
     const u = await api(`/api/usage?${q}`);
     state.usage = u;
-    renderStatus(u);
+    renderUsageRow(u);
     renderSidebar();
     if (state.view === "dash") renderDashboard(u);
-    else renderChatStats();
+    renderMeter();
   } catch (e) {
     setStatus(`Couldn't load usage: ${e.message}`);
   }
@@ -1239,6 +1272,7 @@ function connectEvents() {
   if (!state.rooms.has("group")) state.rooms.set("group", []);
 
   wireSidebar();
+  wireUsageRow();
   wireChat();
   wireDashboard();
   wireMeter();

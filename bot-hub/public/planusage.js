@@ -20,13 +20,14 @@ export const fmtPercentUsed = (pct) => `${+Number(pct).toFixed(1)}%`;
 /** Latest report for an account id like "lifteasy", or null when none has been ingested. */
 export const reportFor = (planUsage, account) => planUsage?.[account] ?? null;
 
-/** Reset time in Eastern, e.g. "Dec 3, 6:36 AM EST". */
+/** Reset time in Eastern, e.g. "Mon Nov 30, 12:52 PM ET" (the "ET" is added once; no EST/EDT suffix). */
 export function fmtResetEastern(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "unknown";
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
+  const text = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
   }).format(d);
+  return `${text.replace(/^(\w+),/, "$1")} ET`;
 }
 
 export function fmtAgo(iso, now = Date.now()) {
