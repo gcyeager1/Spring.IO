@@ -13,7 +13,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#0d1117"
     },
-    "plugins": ["expo-status-bar"],
+    "plugins": [
+      "expo-status-bar"
+    ],
     "android": {
       "package": "com.ezliftgaragedoor.bothub",
       "versionCode": 1,
@@ -23,7 +25,10 @@
       }
     },
     "extra": {
-      "hubUrl": "https://bots.ezliftgaragedoorservice.com"
+      "hubUrl": "https://bots.ezliftgaragedoorservice.com",
+      "eas": {
+        "projectId": "7cb768b5-5c17-45aa-9ddd-8ffc4b4fe9e9"
+      }
     }
   }
 }
