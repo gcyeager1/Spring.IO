@@ -1,4 +1,5 @@
-// Bot Hub front end: sidebar of bots, group chat, status strip and usage dashboard.
+// Bot Hub front end: sidebar of bots, group chat, private chats with each bot,
+// status strip and a usage dashboard with per-bot breakdowns.
 // No build step, no dependencies. Charts are hand-built SVG.
 
 const $ = (sel) => document.querySelector(sel);
@@ -23,13 +24,19 @@ const store = {
 const state = {
   config: null,
   days: store.get("days", "7"),
-  view: store.get("view", "chat"),
-  running: false,
-  typingBot: null,
-  included: null, // Set of bot ids taking part
-  lastByBot: {}, // botId -> last message
+  view: store.get("view2", "group"), // "group" | "dm:<botId>" | "dash"
+  botFilter: store.get("botFilter", null), // dashboard: null = all bots
+  included: null, // Set of bot ids in the group chat
+  rooms: new Map(), // room -> messages
+  running: new Set(), // rooms with bots currently replying
+  typing: new Map(), // room -> botId
+  unread: {}, // room -> count
   usage: null,
 };
+
+const isDm = (room) => String(room).startsWith("dm:");
+const dmBot = (room) => room.slice(3);
+const chatRoom = () => (state.view === "dash" ? null : state.view);
 
 // ---------- formatting ----------
 const fmtUSD = (n) => (n >= 100 ? `$${n.toFixed(0)}` : n >= 1 ? `$${n.toFixed(2)}` : n === 0 ? "$0" : `$${n.toFixed(4)}`);
@@ -37,6 +44,7 @@ const fmtAxisUSD = (n) => (n === 0 ? "$0" : n >= 1 ? `$${+n.toFixed(2)}` : `$${+
 const fmtNum = (n) =>
   n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${(n / 1e3).toFixed(0)}k` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(Math.round(n));
 const fmtTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const fmtSecs = (ms) => (ms ? `${(ms / 1000).toFixed(1)}s` : "–");
 const fmtAgo = (ts) => {
   const s = Math.round((Date.now() - ts) / 1000);
   if (s < 60) return "just now";
@@ -44,17 +52,20 @@ const fmtAgo = (ts) => {
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;
   return `${Math.round(s / 86400)}d ago`;
 };
+const rangeLabel = () => ({ 1: "last 24h", 7: "last 7 days", 30: "last 30 days", all: "all time" })[state.days];
 
-// ---------- identity colors: follow the account (config order), never rank ----------
-const accountIndex = (id) => state.config.accounts.findIndex((a) => a.id === id);
-const accountColor = (id) => {
-  const i = accountIndex(id);
+// ---------- identity: each bot has its own color (config order), never by rank ----------
+const bot = (id) => state.config.bots.find((b) => b.id === id);
+const botName = (id) => bot(id)?.name ?? id;
+const botColor = (id) => {
+  const i = state.config.bots.findIndex((b) => b.id === id);
   return i >= 0 && i < 8 ? `var(--series-${i + 1})` : "var(--series-other)";
 };
 const account = (id) => state.config.accounts.find((a) => a.id === id);
 const accountName = (id) => account(id)?.name ?? id;
-const bot = (id) => state.config.bots.find((b) => b.id === id);
-const botName = (id) => bot(id)?.name ?? id;
+const blankStats = () => ({ requests: 0, errors: 0, input: 0, cachedInput: 0, cacheWrite: 0, output: 0, cost: 0, latencyN: 0, latencySum: 0, groupCost: 0, directCost: 0, groupCalls: 0, directCalls: 0, daily: {} });
+const tokensIn = (s) => (s.input ?? 0) + (s.cachedInput ?? 0) + (s.cacheWrite ?? 0);
+const avgLatency = (s) => (s.latencyN ? s.latencySum / s.latencyN : 0);
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -67,6 +78,11 @@ async function api(path, opts = {}) {
   return data;
 }
 const setStatus = (text) => ($("#status").textContent = text);
+function refreshStatusText() {
+  if (!state.running.size) return setStatus("Idle");
+  const names = [...state.running].map((r) => (isDm(r) ? botName(dmBot(r)) : "Group"));
+  setStatus(`Replying: ${names.join(", ")}…`);
+}
 
 // ---------- shared tooltip ----------
 const tip = $("#tooltip");
@@ -86,66 +102,83 @@ const tipRow = (color, label, value) =>
 
 // ======================= Sidebar =======================
 
-function avatarHtml(b, stateClass = "") {
+function avatarHtml(b, stateClass = null) {
   const initial = esc((b?.name ?? "?").trim()[0]?.toUpperCase() ?? "?");
-  return `<span class="avatar" style="background:${accountColor(b.account)}">${initial}${
+  return `<span class="avatar" style="background:${botColor(b.id)}">${initial}${
     stateClass !== null ? `<span class="state ${stateClass}"></span>` : ""
   }</span>`;
 }
 
 function botState(b) {
-  if (state.typingBot === b.id) return "busy";
-  const acct = account(b.account);
-  if (!state.config.mock && !acct.hasKey) return "bad";
-  const last = state.lastByBot[b.id];
-  if (last?.error) return "bad";
-  return state.included.has(b.id) ? "on" : "";
+  if ([...state.typing.values()].includes(b.id)) return "busy";
+  if (!state.config.mock && !account(b.account).hasKey) return "bad";
+  const last = state.usage?.lastByBot?.[b.id];
+  if (last && !last.ok) return "bad";
+  return "on";
 }
+
+function lastMessageFrom(b) {
+  let last = null;
+  for (const msgs of state.rooms.values()) {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].speaker === b.name) {
+        if (!last || msgs[i].ts > last.ts) last = msgs[i];
+        break;
+      }
+    }
+  }
+  return last;
+}
+
+const unreadBadge = (room) => (state.unread[room] ? `<span class="unread">${state.unread[room]}</span>` : "");
 
 function renderSidebar() {
   $("#bot-list").innerHTML = state.config.bots
     .map((b) => {
-      const last = state.lastByBot[b.id];
-      const preview = last ? last.text : "No messages yet";
-      const on = state.included.has(b.id);
-      return `<li class="bot ${on ? "" : "off"}" data-id="${esc(b.id)}" role="checkbox" aria-checked="${on}" tabindex="0"
-        title="${esc(b.model)} on ${esc(accountName(b.account))}${on ? "" : " (not in this chat)"}">
+      const last = lastMessageFrom(b);
+      const inGroup = state.included.has(b.id);
+      const active = state.view === `dm:${b.id}`;
+      return `<li class="bot ${active ? "active" : ""} ${inGroup ? "" : "off"}" data-id="${esc(b.id)}" tabindex="0"
+          title="Chat privately with ${esc(b.name)} (${esc(b.model)} on ${esc(accountName(b.account))})">
+        <input type="checkbox" class="bot-check" data-id="${esc(b.id)}" ${inGroup ? "checked" : ""}
+          aria-label="Include ${esc(b.name)} in the group chat" title="Include in the group chat" />
         ${avatarHtml(b, botState(b))}
         <span class="bot-text">
-          <span class="bot-name">${esc(b.name)}<small>${last ? fmtTime(last.ts) : ""}</small></span>
+          <span class="bot-name">${esc(b.name)}${unreadBadge(`dm:${b.id}`)}<small>${last ? fmtTime(last.ts) : ""}</small></span>
           <span class="bot-role">${esc(accountName(b.account))} · ${esc(b.model)}</span>
-          <span class="bot-preview">${esc(preview)}</span>
+          <span class="bot-preview">${esc(last ? last.text : "No messages yet")}</span>
         </span>
       </li>`;
     })
     .join("");
-  const names = state.config.bots.filter((b) => state.included.has(b.id)).map((b) => b.name);
-  $("#who").textContent = names.length ? `· ${names.join(", ")}` : "· nobody selected";
+  const g = document.querySelector('[data-unread="group"]');
+  g.hidden = !state.unread.group;
+  g.textContent = state.unread.group ?? "";
+  document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("on", n.dataset.view === state.view));
 }
 
 function wireSidebar() {
-  const toggle = (li) => {
-    const id = li.dataset.id;
-    state.included.has(id) ? state.included.delete(id) : state.included.add(id);
+  $("#bot-list").addEventListener("change", (e) => {
+    const cb = e.target.closest(".bot-check");
+    if (!cb) return;
+    cb.checked ? state.included.add(cb.dataset.id) : state.included.delete(cb.dataset.id);
     store.set("participants", [...state.included]);
     renderSidebar();
-  };
+    if (state.view === "group") renderChatHeader();
+  });
   $("#bot-list").addEventListener("click", (e) => {
+    if (e.target.closest(".bot-check")) return;
     const li = e.target.closest(".bot");
-    if (li) toggle(li);
+    if (li) setView(`dm:${li.dataset.id}`);
   });
   $("#bot-list").addEventListener("keydown", (e) => {
     const li = e.target.closest(".bot");
-    if (li && (e.key === "Enter" || e.key === " ")) {
+    if (li && e.target === li && (e.key === "Enter" || e.key === " ")) {
       e.preventDefault();
-      toggle(li);
+      setView(`dm:${li.dataset.id}`);
     }
   });
-
-  document.querySelectorAll(".nav-item").forEach((btn) =>
-    btn.addEventListener("click", () => setView(btn.dataset.view)),
-  );
-
+  document.querySelectorAll(".nav-item").forEach((btn) => btn.addEventListener("click", () => setView(btn.dataset.view)));
   $("#theme-btn").addEventListener("click", () => {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
@@ -153,14 +186,21 @@ function wireSidebar() {
   });
 }
 
-function setView(view) {
+async function setView(view) {
+  if (isDm(view) && !bot(dmBot(view))) view = "group";
   state.view = view;
-  store.set("view", view);
-  $("#view-chat").hidden = view !== "chat";
-  $("#view-dash").hidden = view !== "dash";
-  document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("on", b.dataset.view === view));
-  if (view === "dash" && state.usage) renderDashboard(state.usage);
-  if (view === "chat") scrollChat();
+  store.set("view2", view);
+  const chat = view !== "dash";
+  $("#view-chat").hidden = !chat;
+  $("#view-dash").hidden = chat;
+  if (chat) {
+    delete state.unread[view];
+    if (!state.rooms.has(view)) state.rooms.set(view, await api(`/api/messages?room=${encodeURIComponent(view)}`));
+    renderChat();
+  } else if (state.usage) {
+    renderDashboard(state.usage);
+  }
+  renderSidebar();
 }
 
 // ======================= Status strip =======================
@@ -184,27 +224,16 @@ function renderStatus(u) {
       return `<span class="pill ${cls}" title="${esc(last?.error ?? "")}"><span class="dot"></span>${esc(a.name)} <span class="muted">${esc(info)}</span></span>`;
     })
     .join("");
-
-  const midnight = new Date();
-  midnight.setHours(0, 0, 0, 0);
-  let cost = 0;
-  let calls = 0;
-  for (const p of u.points) {
-    if (p[0] >= midnight.getTime()) {
-      cost += p[3];
-      calls += 1;
-    }
-  }
-  $("#today").innerHTML = `Today <strong>${fmtUSD(cost)}</strong> · ${calls} calls`;
+  $("#today").innerHTML = `Today <strong>${fmtUSD(u.today.cost)}</strong> · ${u.today.calls} calls`;
 }
 
-// ======================= Chat =======================
+// ======================= Chat (group or private) =======================
 
 function messageHtml(m) {
   const you = m.speaker === "You";
   const b = m.botId ? bot(m.botId) : state.config.bots.find((x) => x.name === m.speaker);
   const note = m.note ? ` <span class="note">· ${esc(m.note)}</span>` : "";
-  const av = you ? "" : b ? avatarHtml(b, null) : `<span class="avatar" style="background:var(--series-other)">!</span>`;
+  const av = you ? "" : b ? avatarHtml(b) : `<span class="avatar" style="background:var(--series-other)">!</span>`;
   return `<li class="msg ${you ? "you" : ""} ${m.error ? "err" : ""}">${av}<div class="bubble">
     <div class="who">${esc(m.speaker)}<time datetime="${new Date(m.ts).toISOString()}">${fmtTime(m.ts)}</time>${note}</div><div class="body">${esc(m.text)}</div></div></li>`;
 }
@@ -214,52 +243,92 @@ function scrollChat() {
   v.scrollTop = v.scrollHeight;
 }
 
-function rememberMessage(m) {
-  const b = m.botId ? bot(m.botId) : state.config.bots.find((x) => x.name === m.speaker);
-  if (b) state.lastByBot[b.id] = m;
-}
-
-function renderMessages(list) {
-  state.lastByBot = {};
-  list.forEach(rememberMessage);
-  $("#messages").innerHTML = list.length
-    ? list.map(messageHtml).join("")
-    : `<li class="empty">Pick bots in the sidebar, then say something. They'll take turns replying.</li>`;
-  renderSidebar();
-  scrollChat();
-}
-
-function appendMessage(m) {
-  $("#messages .empty")?.remove();
-  $("#messages").insertAdjacentHTML("beforeend", messageHtml(m));
-  rememberMessage(m);
-  if (state.typingBot && bot(state.typingBot)?.name === m.speaker) state.typingBot = null;
-  renderSidebar();
-  scrollChat();
-}
-
-function setRunning(running) {
-  state.running = running;
-  $("#stop-btn").disabled = !running;
-  $("#send-btn").disabled = running;
-  $("#continue-btn").disabled = running;
-  $("#clear-btn").disabled = running;
-  if (!running) {
-    $("#typing").hidden = true;
-    state.typingBot = null;
-    renderSidebar();
+function renderChatStats() {
+  const room = chatRoom();
+  const el = $("#chat-stats");
+  if (!room || !isDm(room) || !state.usage) {
+    el.hidden = true;
+    return;
   }
-  setStatus(running ? "Bots are talking…" : "Idle");
+  const s = state.usage.byBot[dmBot(room)] ?? blankStats();
+  el.hidden = false;
+  el.innerHTML = `<span>Cost <strong>${fmtUSD(s.cost)}</strong></span>
+    <span>Calls <strong>${s.requests}</strong></span>
+    <span>Tokens <strong>${fmtNum(tokensIn(s))} in / ${fmtNum(s.output)} out</strong></span>
+    <span>Avg reply <strong>${fmtSecs(avgLatency(s))}</strong></span>
+    <span>Private chat <strong>${fmtUSD(s.directCost)}</strong> · group <strong>${fmtUSD(s.groupCost)}</strong></span>
+    <span>${esc(rangeLabel())}</span>`;
+}
+
+function renderChatHeader() {
+  const room = chatRoom();
+  if (isDm(room)) {
+    const b = bot(dmBot(room));
+    $("#chat-avatar").innerHTML = avatarHtml(b);
+    $("#chat-name").textContent = b.name;
+    $("#chat-sub").textContent = `Private chat · ${b.model} on ${accountName(b.account)}`;
+    $("#input").placeholder = `Message ${b.name}… (Enter to send, Shift+Enter for a new line)`;
+  } else {
+    $("#chat-avatar").innerHTML = "";
+    $("#chat-name").textContent = "Group chat";
+    const names = state.config.bots.filter((b) => state.included.has(b.id)).map((b) => b.name);
+    $("#chat-sub").textContent = names.length ? names.join(", ") : "No bots selected - tick some in the sidebar";
+    $("#input").placeholder = "Message the group… (Enter to send, Shift+Enter for a new line)";
+  }
+  $("#chat-usage-btn").hidden = !isDm(room);
+  document.querySelectorAll(".group-only").forEach((el) => (el.hidden = isDm(room)));
+  renderChatStats();
+  syncButtons();
+}
+
+function renderChat() {
+  const room = chatRoom();
+  renderChatHeader();
+  const list = state.rooms.get(room) ?? [];
+  const empty = isDm(room)
+    ? `Start a private conversation with ${esc(botName(dmBot(room)))}.`
+    : "Tick bots in the sidebar, then say something. They'll take turns replying.";
+  $("#messages").innerHTML = list.length ? list.map(messageHtml).join("") : `<li class="empty">${empty}</li>`;
+  const typingBot = state.typing.get(room);
+  $("#typing").hidden = !typingBot;
+  if (typingBot) $("#typing").textContent = `${botName(typingBot)} is typing…`;
+  scrollChat();
+}
+
+function onMessage(m) {
+  const room = m.room ?? "group";
+  if (!state.rooms.has(room)) state.rooms.set(room, []);
+  state.rooms.get(room).push(m);
+  if (state.typing.get(room) && botName(state.typing.get(room)) === m.speaker) state.typing.delete(room);
+  if (room === chatRoom()) {
+    $("#messages .empty")?.remove();
+    $("#messages").insertAdjacentHTML("beforeend", messageHtml(m));
+    $("#typing").hidden = !state.typing.get(room);
+    scrollChat();
+  } else if (m.speaker !== "You") {
+    state.unread[room] = (state.unread[room] ?? 0) + 1;
+  }
+  renderSidebar();
+}
+
+function syncButtons() {
+  const room = chatRoom();
+  const busy = room && state.running.has(room);
+  $("#send-btn").disabled = Boolean(busy);
+  $("#continue-btn").disabled = Boolean(busy);
+  $("#clear-btn").disabled = Boolean(busy);
+  $("#stop-btn").disabled = !state.running.size;
 }
 
 async function send(text) {
+  const room = chatRoom() ?? "group";
   const participants = state.config.bots.filter((b) => state.included.has(b.id)).map((b) => b.id);
-  if (!participants.length) return setStatus("Pick at least one bot in the sidebar.");
+  if (room === "group" && !participants.length) return setStatus("Tick at least one bot in the sidebar for the group chat.");
   try {
-    await api("/api/messages", { method: "POST", body: { text, participants, rounds: Number($("#rounds").value) || 1 } });
+    await api("/api/messages", { method: "POST", body: { room, text, participants, rounds: Number($("#rounds").value) || 1 } });
     $("#input").value = "";
     autosize();
-    if (state.view !== "chat" && text) setView("chat");
+    if (state.view === "dash") setView(room);
   } catch (e) {
     setStatus(e.message);
   }
@@ -286,16 +355,22 @@ function wireChat() {
   });
   $("#continue-btn").addEventListener("click", () => send(""));
   $("#stop-btn").addEventListener("click", () => {
-    api("/api/stop", { method: "POST" });
-    setStatus("Pausing after the current reply…");
+    api("/api/stop", { method: "POST", body: {} });
+    setStatus("Pausing after the current replies…");
   });
   $("#clear-btn").addEventListener("click", async () => {
-    if (!confirm("Clear the whole chat history? Usage stats are kept.")) return;
+    const room = chatRoom();
+    const label = isDm(room) ? `your private chat with ${botName(dmBot(room))}` : "the group chat";
+    if (!confirm(`Clear ${label}? Usage stats are kept.`)) return;
     try {
-      await api("/api/messages", { method: "DELETE" });
+      await api(`/api/messages?room=${encodeURIComponent(room)}`, { method: "DELETE" });
     } catch (e) {
       setStatus(e.message);
     }
+  });
+  $("#chat-usage-btn").addEventListener("click", () => {
+    setBotFilter(dmBot(chatRoom()));
+    setView("dash");
   });
 }
 
@@ -311,10 +386,6 @@ function roundedTop(x, y, w, h, r) {
   r = Math.min(r, w / 2, h);
   return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
 }
-function roundedRight(x, y, w, h, r) {
-  r = Math.min(r, h / 2, w);
-  return `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h - r}Q${x + w},${y + h} ${x + w - r},${y + h}H${x}Z`;
-}
 const svgPoint = (svg, e, W, H) => {
   const r = svg.getBoundingClientRect();
   return { x: ((e.clientX - r.left) / r.width) * W, y: ((e.clientY - r.top) / r.height) * H };
@@ -322,34 +393,52 @@ const svgPoint = (svg, e, W, H) => {
 const widthOf = (el) => Math.max(280, Math.round(el.clientWidth || 380));
 const noData = (W, H, msg = "No calls in this range yet") =>
   `<svg viewBox="0 0 ${W} ${H}"><text class="nodata" x="${W / 2}" y="${H / 2}" text-anchor="middle">${msg}</text></svg>`;
+const shownBots = () => (state.botFilter ? state.config.bots.filter((b) => b.id === state.botFilter) : state.config.bots);
 
 function rangeStart(u) {
   if (state.days !== "all") return u.since;
   return u.points.length ? Math.min(u.points[0][0], u.now - 86_400_000) : u.now - 86_400_000;
 }
+function dayList(u) {
+  const end = new Date();
+  end.setUTCHours(0, 0, 0, 0);
+  let start;
+  if (state.days === "all") {
+    const keys = Object.keys(u.byDay).sort();
+    start = keys.length ? new Date(`${keys[0]}T00:00:00Z`) : new Date(end);
+  } else {
+    start = new Date(end.getTime() - (Math.max(Number(state.days), 1) - 1) * 86_400_000);
+  }
+  const out = [];
+  for (let d = start.getTime(); d <= end.getTime(); d += 86_400_000) out.push(new Date(d).toISOString().slice(0, 10));
+  return out;
+}
+function yAxis(W, L, R, y, max, fmt) {
+  let s = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = (max / 4) * i;
+    s += `<line class="gridline" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`;
+  }
+  return s;
+}
 
-// --- Cumulative cost line chart, crosshair tooltip, direct end labels ---
+// --- Cumulative cost per bot: step lines, crosshair tooltip, direct end labels ---
 function renderLine(u) {
   const el = $("#chart-line");
-  const W = widthOf(el), H = 240, L = 52, R = 130, T = 12, B = 24;
-  const accounts = state.config.accounts;
+  const W = widthOf(el), H = 240, L = 52, R = 120, T = 12, B = 24;
   if (!u.points.length) return (el.innerHTML = noData(W, H));
   const t0 = rangeStart(u), t1 = u.now;
-  const series = accounts.map((a) => {
+  const series = shownBots().map((b) => {
     let cum = 0;
     const pts = [[t0, 0]];
-    for (const p of u.points) if (p[1] === a.id) pts.push([p[0], (cum += p[3])]);
-    return { a, pts, total: cum };
+    for (const p of u.points) if (p[2] === b.id) pts.push([p[0], (cum += p[3])]);
+    return { b, pts, total: cum };
   });
   const max = niceMax(Math.max(...series.map((s) => s.total)));
   const x = (t) => L + ((t - t0) / Math.max(1, t1 - t0)) * (W - L - R);
   const y = (v) => T + (H - T - B) - (v / max) * (H - T - B);
 
-  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cumulative cost by account">`;
-  for (let i = 0; i <= 4; i++) {
-    const v = (max / 4) * i;
-    s += `<line class="gridline" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${fmtAxisUSD(v)}</text>`;
-  }
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cumulative cost by bot">` + yAxis(W, L, R, y, max, fmtAxisUSD);
   const span = t1 - t0;
   for (let i = 0; i <= 4; i++) {
     const t = t0 + (span / 4) * i;
@@ -358,18 +447,16 @@ function renderLine(u) {
       : new Date(t).toLocaleDateString([], { month: "short", day: "numeric" });
     s += `<text x="${x(t)}" y="${H - 6}" text-anchor="${i === 0 ? "start" : i === 4 ? "end" : "middle"}">${lab}</text>`;
   }
-  // Step lines: cost jumps at each call.
   for (const sr of series) {
     let d = `M${x(sr.pts[0][0])},${y(0)}`;
     for (let i = 1; i < sr.pts.length; i++) d += `H${x(sr.pts[i][0])}V${y(sr.pts[i][1])}`;
     d += `H${x(t1)}`;
-    s += `<path d="${d}" fill="none" stroke="${accountColor(sr.a.id)}" stroke-width="2" stroke-linejoin="round"/>`;
+    s += `<path d="${d}" fill="none" stroke="${botColor(sr.b.id)}" stroke-width="2" stroke-linejoin="round"/>`;
   }
-  // Direct labels at the line ends, nudged apart so they don't collide.
   const labels = series.map((sr) => ({ sr, y: y(sr.total) })).sort((a, b) => a.y - b.y);
   for (let i = 1; i < labels.length; i++) labels[i].y = Math.max(labels[i].y, labels[i - 1].y + 13);
   for (const l of labels) {
-    s += `<text x="${W - R + 6}" y="${l.y + 4}" class="val">${esc(l.sr.a.name)} <tspan fill="var(--text-2)">${fmtUSD(l.sr.total)}</tspan></text>`;
+    s += `<text x="${W - R + 6}" y="${l.y + 4}" class="val">${esc(l.sr.b.name)} <tspan fill="var(--text-2)">${fmtUSD(l.sr.total)}</tspan></text>`;
   }
   s += `<line class="crosshair" x1="0" x2="0" y1="${T}" y2="${H - B}" visibility="hidden"/>`;
   s += `<rect class="hit-area" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/></svg>`;
@@ -391,7 +478,7 @@ function renderLine(u) {
           if (pt > t) break;
           v = pv;
         }
-        return tipRow(accountColor(sr.a.id), sr.a.name, fmtUSD(v));
+        return tipRow(botColor(sr.b.id), sr.b.name, fmtUSD(v));
       })
       .join("");
     showTip(e, `<div class="t-head">${new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>${rows}`);
@@ -402,118 +489,68 @@ function renderLine(u) {
   });
 }
 
-// --- Horizontal bars: cost per bot, colored by the bot's account ---
-function renderBotBars(u) {
-  const el = $("#chart-bots");
-  const rows = state.config.bots.map((b) => ({ b, s: u.byBot[b.id] })).sort((a, b) => b.s.cost - a.s.cost);
-  const W = widthOf(el), L = 70, R = 64, rowH = 28, T = 4;
-  const H = T + rows.length * rowH + 4;
-  if (!u.total.requests) return (el.innerHTML = noData(W, Math.max(H, 120)));
-  const max = Math.max(...rows.map((r) => r.s.cost), 1e-9);
-  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cost by bot">`;
-  rows.forEach(({ b, s: st }, i) => {
-    const y0 = T + i * rowH;
-    const w = (st.cost / max) * (W - L - R);
-    s += `<g class="row" data-i="${i}"><rect class="hit" x="0" y="${y0}" width="${W}" height="${rowH}" rx="4"/>`;
-    s += `<text x="${L - 8}" y="${y0 + rowH / 2 + 4}" text-anchor="end">${esc(b.name)}</text>`;
-    if (w > 0.5) s += `<path d="${roundedRight(L, y0 + 8, Math.max(w, 2), rowH - 16, 4)}" fill="${accountColor(b.account)}"/>`;
-    s += `<text class="val" x="${L + Math.max(w, 0) + 6}" y="${y0 + rowH / 2 + 4}">${fmtUSD(st.cost)}</text></g>`;
-  });
-  el.innerHTML = s + "</svg>";
-  el.querySelectorAll(".row").forEach((g) => {
-    const { b, s: st } = rows[Number(g.dataset.i)];
-    g.addEventListener("mousemove", (e) =>
-      showTip(e, `<div class="t-head">${esc(b.name)}</div>${tipRow(accountColor(b.account), accountName(b.account), esc(b.model))}
-        ${tipRow("", "Cost", fmtUSD(st.cost))}${tipRow("", "Calls", st.requests)}
-        ${tipRow("", "Tokens in / out", `${fmtNum(st.input + st.cachedInput + st.cacheWrite)} / ${fmtNum(st.output)}`)}`),
-    );
-    g.addEventListener("mouseleave", hideTip);
-  });
-}
-
-// --- Grouped bars: tokens in vs out per account ---
-const TOKEN_COLORS = { in: "var(--series-7)", out: "var(--series-5)" };
+// --- Grouped bars: tokens in (faded) vs out (solid) per bot ---
 function renderTokenBars(u) {
   const el = $("#chart-tokens");
-  $("#legend-tokens").innerHTML = `<span><span class="dot" style="background:${TOKEN_COLORS.in}"></span>In</span><span><span class="dot" style="background:${TOKEN_COLORS.out}"></span>Out</span>`;
-  const W = widthOf(el), H = 200, L = 44, R = 6, T = 10, B = 24;
-  if (!u.total.requests) return (el.innerHTML = noData(W, H));
-  const groups = state.config.accounts.map((a) => {
-    const s = u.byAccount[a.id];
-    return { a, tin: s.input + s.cachedInput + s.cacheWrite, tout: s.output };
+  $("#legend-tokens").innerHTML =
+    `<span><span class="dot" style="background:var(--text-2);opacity:.45"></span>In (faded)</span>` +
+    `<span><span class="dot" style="background:var(--text-2)"></span>Out (solid)</span>`;
+  const W = widthOf(el), H = 210, L = 44, R = 6, T = 10, B = 24;
+  const groups = shownBots().map((b) => {
+    const s = u.byBot[b.id] ?? blankStats();
+    return { b, tin: tokensIn(s), tout: s.output };
   });
+  if (!groups.some((g) => g.tin || g.tout)) return (el.innerHTML = noData(W, H));
   const max = niceMax(Math.max(...groups.map((g) => Math.max(g.tin, g.tout))));
   const y = (v) => T + (H - T - B) - (v / max) * (H - T - B);
   const step = (W - L - R) / groups.length;
-  const bw = Math.min(26, step * 0.3);
-  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Tokens in and out by account">`;
-  for (let i = 0; i <= 4; i++) {
-    const v = (max / 4) * i;
-    s += `<line class="gridline" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${fmtNum(v)}</text>`;
-  }
+  const bw = Math.min(28, step * 0.3);
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Tokens in and out by bot">` + yAxis(W, L, R, y, max, fmtNum);
   groups.forEach((g, i) => {
     const cx = L + step * i + step / 2;
+    const c = botColor(g.b.id);
     s += `<g class="col" data-i="${i}"><rect class="hit" x="${L + step * i}" y="${T}" width="${step}" height="${H - T - B}"/>`;
     const hin = y(0) - y(g.tin), hout = y(0) - y(g.tout);
-    if (hin > 0) s += `<path d="${roundedTop(cx - bw - 1, y(g.tin), bw, hin, 4)}" fill="${TOKEN_COLORS.in}"/>`;
-    if (hout > 0) s += `<path d="${roundedTop(cx + 1, y(g.tout), bw, hout, 4)}" fill="${TOKEN_COLORS.out}"/>`;
-    s += `</g><text x="${cx}" y="${H - 6}" text-anchor="middle">${esc(g.a.name.length > 16 ? g.a.name.slice(0, 15) + "…" : g.a.name)}</text>`;
+    if (hin > 0) s += `<path d="${roundedTop(cx - bw - 1, y(g.tin), bw, hin, 4)}" fill="${c}" fill-opacity=".45"/>`;
+    if (hout > 0) s += `<path d="${roundedTop(cx + 1, y(g.tout), bw, hout, 4)}" fill="${c}"/>`;
+    s += `</g><text x="${cx}" y="${H - 6}" text-anchor="middle">${esc(g.b.name)}</text>`;
   });
   el.innerHTML = s + "</svg>";
   el.querySelectorAll(".col").forEach((gEl) => {
     const g = groups[Number(gEl.dataset.i)];
     gEl.addEventListener("mousemove", (e) =>
-      showTip(e, `<div class="t-head">${esc(g.a.name)}</div>${tipRow(TOKEN_COLORS.in, "Tokens in", fmtNum(g.tin))}${tipRow(TOKEN_COLORS.out, "Tokens out", fmtNum(g.tout))}`),
+      showTip(e, `<div class="t-head">${esc(g.b.name)}</div>${tipRow("", "Tokens in", fmtNum(g.tin))}${tipRow("", "Tokens out", fmtNum(g.tout))}`),
     );
     gEl.addEventListener("mouseleave", hideTip);
   });
 }
 
-// --- Stacked daily cost by account ---
-function dayList(u) {
-  const end = new Date();
-  end.setUTCHours(0, 0, 0, 0);
-  let start;
-  if (state.days === "all") {
-    const keys = Object.keys(u.byDay).sort();
-    start = keys.length ? new Date(`${keys[0]}T00:00:00Z`) : new Date(end);
-  } else {
-    start = new Date(end.getTime() - (Math.max(Number(state.days), 1) - 1) * 86_400_000);
-  }
-  const out = [];
-  for (let d = start.getTime(); d <= end.getTime(); d += 86_400_000) out.push(new Date(d).toISOString().slice(0, 10));
-  return out;
-}
-
+// --- Stacked daily cost by bot ---
 function renderDaily(u) {
   const el = $("#chart-daily");
-  const accounts = state.config.accounts;
+  const bots = shownBots();
   const days = dayList(u);
-  const W = widthOf(el), H = 200, L = 48, R = 6, T = 10, B = 24;
+  const W = widthOf(el), H = 210, L = 48, R = 6, T = 10, B = 24;
   if (!u.total.requests) return (el.innerHTML = noData(W, H));
-  const totals = days.map((d) => accounts.reduce((s, a) => s + (u.byDay[d]?.[a.id]?.cost ?? 0), 0));
+  const totals = days.map((d) => bots.reduce((s, b) => s + (u.byDay[d]?.[b.id]?.cost ?? 0), 0));
   const max = niceMax(Math.max(...totals));
   const y = (v) => T + (H - T - B) - (v / max) * (H - T - B);
   const step = (W - L - R) / days.length;
   const bw = Math.max(3, Math.min(28, step * 0.6));
-  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily cost by account">`;
-  for (let i = 0; i <= 4; i++) {
-    const v = (max / 4) * i;
-    s += `<line class="gridline" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${fmtAxisUSD(v)}</text>`;
-  }
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily cost by bot">` + yAxis(W, L, R, y, max, fmtAxisUSD);
   const every = Math.ceil(days.length / 6);
   days.forEach((d, i) => {
     const cx = L + step * i + step / 2;
     s += `<g class="col" data-i="${i}"><rect class="hit" x="${L + step * i}" y="${T}" width="${step}" height="${H - T - B}"/>`;
-    const segs = accounts.map((a) => ({ a, v: u.byDay[d]?.[a.id]?.cost ?? 0 })).filter((x) => x.v > 0);
+    const segs = bots.map((b) => ({ b, v: u.byDay[d]?.[b.id]?.cost ?? 0 })).filter((x) => x.v > 0);
     let base = 0;
     segs.forEach((sg, j) => {
       const y0 = y(base), y1 = y(base + sg.v);
       const h = Math.max(0, y0 - y1 - (j > 0 ? 2 : 0)); // 2px gap between stacked segments
       if (h > 0)
         s += j === segs.length - 1
-          ? `<path d="${roundedTop(cx - bw / 2, y1, bw, h, 4)}" fill="${accountColor(sg.a.id)}"/>`
-          : `<rect x="${cx - bw / 2}" y="${y1}" width="${bw}" height="${h}" fill="${accountColor(sg.a.id)}"/>`;
+          ? `<path d="${roundedTop(cx - bw / 2, y1, bw, h, 4)}" fill="${botColor(sg.b.id)}"/>`
+          : `<rect x="${cx - bw / 2}" y="${y1}" width="${bw}" height="${h}" fill="${botColor(sg.b.id)}"/>`;
       base += sg.v;
     });
     s += `</g>`;
@@ -524,10 +561,10 @@ function renderDaily(u) {
   el.querySelectorAll(".col").forEach((g) => {
     const i = Number(g.dataset.i);
     g.addEventListener("mousemove", (e) =>
-      showTip(e, `<div class="t-head">${days[i]} · ${fmtUSD(totals[i])}</div>${accounts
-        .map((a) => {
-          const st = u.byDay[days[i]]?.[a.id];
-          return tipRow(accountColor(a.id), a.name, `${fmtUSD(st?.cost ?? 0)} · ${st?.requests ?? 0} calls`);
+      showTip(e, `<div class="t-head">${days[i]} · ${fmtUSD(totals[i])}</div>${bots
+        .map((b) => {
+          const st = u.byDay[days[i]]?.[b.id];
+          return tipRow(botColor(b.id), b.name, `${fmtUSD(st?.cost ?? 0)} · ${st?.requests ?? 0} calls`);
         })
         .join("")}`),
     );
@@ -538,7 +575,7 @@ function renderDaily(u) {
 // --- Heatmap: calls by weekday x hour, in the viewer's time zone ---
 function renderHeat(u) {
   const el = $("#chart-heat");
-  const W = widthOf(el), L = 34, T = 4, B = 18, rowH = 20;
+  const W = widthOf(el), L = 34, T = 4, B = 18, rowH = 22;
   const H = T + rowH * 7 + B;
   if (!u.points.length) return (el.innerHTML = noData(W, H));
   const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -571,7 +608,35 @@ function renderHeat(u) {
   });
 }
 
+// --- Sparkline of one bot's daily cost ---
+function sparkline(daily, days, color) {
+  const W = 200, H = 32;
+  const vals = days.map((d) => daily[d] ?? 0);
+  const max = Math.max(...vals);
+  if (!max) return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><line x1="0" x2="${W}" y1="${H - 1}" y2="${H - 1}" stroke="var(--border)"/></svg>`;
+  const x = (i) => (vals.length === 1 ? W / 2 : (i / (vals.length - 1)) * W);
+  const y = (v) => H - 2 - (v / max) * (H - 4);
+  const line = vals.map((v, i) => `${i ? "L" : "M"}${x(i)},${y(v)}`).join("");
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+    <path d="${line}L${x(vals.length - 1)},${H}L${x(0)},${H}Z" fill="${color}" fill-opacity=".15"/>
+    <path d="${line}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
 // ======================= Dashboard =======================
+
+function setBotFilter(id) {
+  state.botFilter = id;
+  store.set("botFilter", id);
+  refreshUsage();
+}
+
+function renderFilter() {
+  const chip = (id, label, color) =>
+    `<button type="button" class="chip ${state.botFilter === id ? "on" : ""}" data-bot="${id ?? ""}" role="radio" aria-checked="${state.botFilter === id}">${
+      color ? `<span class="dot" style="background:${color}"></span>` : ""
+    }${esc(label)}</button>`;
+  $("#bot-filter").innerHTML = chip(null, "All bots") + state.config.bots.map((b) => chip(b.id, b.name, botColor(b.id))).join("");
+}
 
 function renderKpis(u) {
   const t = u.total;
@@ -579,10 +644,54 @@ function renderKpis(u) {
   $("#kpis").innerHTML =
     kpi("Total cost", fmtUSD(t.cost)) +
     kpi("Calls", t.requests) +
-    kpi("Tokens in", fmtNum(t.input + t.cachedInput + t.cacheWrite)) +
+    kpi("Tokens in", fmtNum(tokensIn(t))) +
     kpi("Tokens out", fmtNum(t.output)) +
+    kpi("Group chat", fmtUSD(t.groupCost)) +
+    kpi("Private chats", fmtUSD(t.directCost)) +
     kpi("Failed calls", t.errors, t.errors ? "bad" : "") +
-    kpi("Avg reply time", t.avgLatencyMs ? `${(t.avgLatencyMs / 1000).toFixed(1)}s` : "–");
+    kpi("Avg reply time", fmtSecs(avgLatency(t)));
+}
+
+function renderBotCards(u) {
+  const days = dayList(u);
+  const all = Object.values(u.byBot).reduce((s, b) => s + b.cost, 0);
+  $("#bot-cards").innerHTML = state.config.bots
+    .map((b) => {
+      const s = u.byBot[b.id] ?? blankStats();
+      const c = botColor(b.id);
+      const share = all ? (s.cost / all) * 100 : 0;
+      const gShare = s.cost ? (s.groupCost / s.cost) * 100 : 0;
+      return `<button type="button" class="bot-card ${state.botFilter === b.id ? "on" : ""}" data-bot="${esc(b.id)}"
+          aria-pressed="${state.botFilter === b.id}" title="Show only ${esc(b.name)} in the charts">
+        <span class="top">${avatarHtml(b, botState(b))}<span><span class="nm">${esc(b.name)}</span><br><span class="meta">${esc(accountName(b.account))} · ${esc(b.model)}</span></span></span>
+        <span class="cost">${fmtUSD(s.cost)}<small>${share.toFixed(0)}% of spend</small></span>
+        <span class="share"><span style="width:${share}%;background:${c}"></span></span>
+        ${sparkline(s.daily ?? {}, days, c)}
+        <dl>
+          <dt>Calls</dt><dd>${s.requests}</dd>
+          <dt>Tokens in / out</dt><dd>${fmtNum(tokensIn(s))} / ${fmtNum(s.output)}</dd>
+          <dt>Avg reply</dt><dd>${fmtSecs(avgLatency(s))}</dd>
+          <dt>Failed</dt><dd class="${s.errors ? "bad" : ""}">${s.errors}</dd>
+        </dl>
+        <span class="split" title="Group chat ${fmtUSD(s.groupCost)} · private chat ${fmtUSD(s.directCost)}">
+          ${s.cost ? `<span style="width:${gShare}%;background:${c}"></span><span style="flex:1;background:${c};opacity:.4"></span>` : ""}
+        </span>
+        <span class="split-legend"><span>Group ${fmtUSD(s.groupCost)}</span><span>Private ${fmtUSD(s.directCost)}</span></span>
+      </button>`;
+    })
+    .join("");
+}
+
+function renderAccounts(u) {
+  const rows = state.config.accounts
+    .map((a) => {
+      const s = u.byAccount[a.id] ?? blankStats();
+      const bots = state.config.bots.filter((b) => b.account === a.id).map((b) => b.name).join(", ");
+      return `<tr><td>${esc(a.name)}</td><td>${esc(bots)}</td><td class="num">${s.requests}</td>
+        <td class="num">${fmtNum(tokensIn(s))} / ${fmtNum(s.output)}</td><td class="num">${fmtUSD(s.cost)}</td></tr>`;
+    })
+    .join("");
+  $("#account-table").innerHTML = `<thead><tr><th>Account</th><th>Bots</th><th class="num">Calls</th><th class="num">Tokens in / out</th><th class="num">Cost</th></tr></thead><tbody>${rows}</tbody>`;
 }
 
 function renderRecent(u) {
@@ -590,45 +699,55 @@ function renderRecent(u) {
     .map(
       (r) => `<tr>
         <td>${fmtTime(r.ts)}</td>
-        <td><span class="dot" style="background:${accountColor(r.account)}"></span> ${esc(botName(r.bot))}</td>
+        <td><span class="dot" style="background:${botColor(r.bot)}"></span> ${esc(botName(r.bot))}</td>
+        <td>${isDm(r.room) ? "Private" : "Group"}</td>
         <td>${esc(accountName(r.account))}</td>
         <td>${esc(r.model ?? "")}</td>
-        <td class="num">${fmtNum((r.input ?? 0) + (r.cachedInput ?? 0) + (r.cacheWrite ?? 0))}</td>
+        <td class="num">${fmtNum(tokensIn(r))}</td>
         <td class="num">${fmtNum(r.output ?? 0)}</td>
         <td class="num">${fmtUSD(r.cost ?? 0)}</td>
-        <td class="num">${((r.latencyMs ?? 0) / 1000).toFixed(1)}s</td>
+        <td class="num">${fmtSecs(r.latencyMs)}</td>
         <td class="${r.ok ? "" : "err"}">${r.ok ? "ok" : esc(r.error ?? "error")}</td>
       </tr>`,
     )
     .join("");
-  $("#recent-table").innerHTML = `<thead><tr><th>Time</th><th>Bot</th><th>Account</th><th>Model</th><th class="num">In</th>
+  $("#recent-table").innerHTML = `<thead><tr><th>Time</th><th>Bot</th><th>Chat</th><th>Account</th><th>Model</th><th class="num">In</th>
     <th class="num">Out</th><th class="num">Cost</th><th class="num">Took</th><th>Status</th></tr></thead>
-    <tbody>${rows || `<tr><td colspan="9">No calls in this range yet.</td></tr>`}</tbody>`;
+    <tbody>${rows || `<tr><td colspan="10">No calls in this range yet.</td></tr>`}</tbody>`;
 }
 
 function renderDashboard(u) {
-  document.querySelectorAll("[data-legend=accounts]").forEach((el) => {
-    el.innerHTML = state.config.accounts
-      .map((a) => `<span><span class="dot" style="background:${accountColor(a.id)}"></span>${esc(a.name)}</span>`)
+  $("#dash-scope").textContent = `· ${state.botFilter ? botName(state.botFilter) : "all bots"} · ${rangeLabel()}`;
+  document.querySelectorAll("[data-legend=bots]").forEach((el) => {
+    el.innerHTML = shownBots()
+      .map((b) => `<span><span class="dot" style="background:${botColor(b.id)}"></span>${esc(b.name)}</span>`)
       .join("");
   });
+  renderFilter();
   renderKpis(u);
+  renderBotCards(u);
   renderLine(u);
-  renderBotBars(u);
   renderTokenBars(u);
   renderDaily(u);
   renderHeat(u);
+  renderAccounts(u);
   renderRecent(u);
 }
 
 let usageTimer = null;
 async function refreshUsage() {
   clearTimeout(usageTimer);
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  const q = new URLSearchParams({ days: state.days, todayStart: String(midnight.getTime()) });
+  if (state.botFilter) q.set("bot", state.botFilter);
   try {
-    const u = await api(`/api/usage?days=${state.days}`);
+    const u = await api(`/api/usage?${q}`);
     state.usage = u;
     renderStatus(u);
+    renderSidebar();
     if (state.view === "dash") renderDashboard(u);
+    else renderChatStats();
   } catch (e) {
     setStatus(`Couldn't load usage: ${e.message}`);
   }
@@ -654,25 +773,51 @@ function wireDashboard() {
       refreshUsage();
     }),
   );
+  $("#bot-filter").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (chip) setBotFilter(chip.dataset.bot || null);
+  });
+  $("#bot-cards").addEventListener("click", (e) => {
+    const card = e.target.closest(".bot-card");
+    if (card) setBotFilter(state.botFilter === card.dataset.bot ? null : card.dataset.bot);
+  });
 }
 
 // ======================= Live events =======================
 
 function connectEvents() {
   const es = new EventSource("/api/events");
-  es.addEventListener("message", (e) => appendMessage(JSON.parse(e.data)));
+  es.addEventListener("message", (e) => onMessage(JSON.parse(e.data)));
   es.addEventListener("typing", (e) => {
-    const { botId, name } = JSON.parse(e.data);
-    state.typingBot = botId;
-    $("#typing").textContent = `${name} is typing…`;
-    $("#typing").hidden = false;
+    const { room, botId, name } = JSON.parse(e.data);
+    state.typing.set(room, botId);
+    if (room === chatRoom()) {
+      $("#typing").textContent = `${name} is typing…`;
+      $("#typing").hidden = false;
+      scrollChat();
+    }
     renderSidebar();
-    scrollChat();
   });
-  es.addEventListener("status", (e) => setRunning(JSON.parse(e.data).running));
+  es.addEventListener("status", (e) => {
+    const { running, done } = JSON.parse(e.data);
+    state.running = new Set(running);
+    if (done) {
+      state.typing.delete(done);
+      if (done === chatRoom()) $("#typing").hidden = true;
+    }
+    syncButtons();
+    refreshStatusText();
+    renderSidebar();
+  });
   es.addEventListener("usage", scheduleUsage);
-  es.addEventListener("cleared", () => renderMessages([]));
+  es.addEventListener("cleared", (e) => {
+    const { room } = JSON.parse(e.data);
+    state.rooms.set(room, []);
+    if (room === chatRoom()) renderChat();
+    renderSidebar();
+  });
   es.onerror = () => setStatus("Reconnecting to server…");
+  es.onopen = refreshStatusText;
 }
 
 // ======================= Boot =======================
@@ -682,15 +827,24 @@ function connectEvents() {
   if (theme) document.documentElement.dataset.theme = theme;
   state.config = await api("/api/config");
   const saved = store.get("participants", null);
-  state.included = new Set(saved ?? state.config.bots.map((b) => b.id));
+  state.included = new Set((saved ?? state.config.bots.map((b) => b.id)).filter((id) => bot(id)));
+  if (state.botFilter && !bot(state.botFilter)) state.botFilter = null;
   $("#mode-badge").hidden = !state.config.mock;
+
+  // Load every room's history once, so sidebar previews are complete.
+  for (const m of await api("/api/messages")) {
+    if (!state.rooms.has(m.room)) state.rooms.set(m.room, []);
+    state.rooms.get(m.room).push(m);
+  }
+  if (!state.rooms.has("group")) state.rooms.set("group", []);
+
   wireSidebar();
   wireChat();
   wireDashboard();
-  renderMessages(await api("/api/messages"));
-  setView(state.view);
   await refreshUsage();
+  await setView(state.view);
   connectEvents();
+
   let rz;
   addEventListener("resize", () => {
     clearTimeout(rz);

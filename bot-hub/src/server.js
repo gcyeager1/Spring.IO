@@ -4,12 +4,15 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { ROOT, loadConfig, publicConfig, isMock } from "./config.js";
 import { callBot, costOf } from "./providers.js";
-import { addMessage, getChat, clearChat, recordUsage, summarizeUsage } from "./store.js";
+import { addMessage, getChat, clearChat, recordUsage, summarizeUsage, isDirect } from "./store.js";
 
 const cfg = loadConfig();
 const PORT = Number(process.env.PORT ?? cfg.port ?? 3000);
 const HOST = process.env.HOST ?? "127.0.0.1";
 const botsById = new Map(cfg.bots.map((b) => [b.id, b]));
+
+// A room is "group" or "dm:<botId>" (a private chat with one bot).
+const validRoom = (room) => room === "group" || (isDirect(room) && botsById.has(room.slice(3)));
 
 // ---------- Server-sent events: live chat + dashboard updates ----------
 const listeners = new Set();
@@ -18,31 +21,34 @@ function broadcast(type, data) {
   for (const res of listeners) res.write(frame);
 }
 
-// ---------- Conversation runner ----------
-let run = null; // { stop: boolean } while bots are talking
+// ---------- Conversation runner: one run at a time per room ----------
+const runs = new Map(); // room -> { stop: boolean }
+const runningRooms = () => [...runs.keys()];
 
-async function runConversation(participantIds, rounds) {
+async function runConversation(room, participantIds, rounds) {
   const participants = participantIds.map((id) => botsById.get(id));
   const names = ["You", ...participants.map((b) => b.name)];
-  run = { stop: false };
-  broadcast("status", { running: true });
+  const run = { stop: false };
+  runs.set(room, run);
+  broadcast("status", { running: runningRooms() });
   try {
     for (let r = 0; r < rounds && !run.stop; r++) {
       for (const bot of participants) {
         if (run.stop) break;
         const account = cfg.accountsById.get(bot.account);
-        broadcast("typing", { botId: bot.id, name: bot.name });
+        broadcast("typing", { room, botId: bot.id, name: bot.name });
         const started = Date.now();
         let result;
         let error;
         try {
-          result = await callBot(bot, account, getChat(), names);
+          result = await callBot(bot, account, getChat(room), names, { direct: isDirect(room) });
         } catch (err) {
           error = err?.message ?? String(err);
         }
         const usage = result?.usage ?? { input: 0, cachedInput: 0, cacheWrite: 0, output: 0 };
         recordUsage({
           ts: Date.now(),
+          room,
           account: account.id,
           bot: bot.id,
           model: result?.model ?? bot.model,
@@ -57,6 +63,7 @@ async function runConversation(participantIds, rounds) {
         const msg = addMessage({
           id: randomUUID(),
           ts: Date.now(),
+          room,
           speaker: bot.name,
           // Error lines are kept out of the bots' view of the transcript.
           botId: error ? null : bot.id,
@@ -70,8 +77,8 @@ async function runConversation(participantIds, rounds) {
       }
     }
   } finally {
-    run = null;
-    broadcast("status", { running: false });
+    runs.delete(room);
+    broadcast("status", { running: runningRooms(), done: room });
   }
 }
 
@@ -112,7 +119,7 @@ const server = http.createServer(async (req, res) => {
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
       });
-      res.write(`event: status\ndata: ${JSON.stringify({ running: Boolean(run) })}\n\n`);
+      res.write(`event: status\ndata: ${JSON.stringify({ running: runningRooms() })}\n\n`);
       listeners.add(res);
       const ping = setInterval(() => res.write(": ping\n\n"), 25_000);
       req.on("close", () => {
@@ -127,39 +134,57 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/messages") {
-      if (req.method === "GET") return json(res, 200, getChat());
+      if (req.method === "GET") {
+        const room = url.searchParams.get("room");
+        if (room && !validRoom(room)) return json(res, 400, { error: "Unknown room" });
+        return json(res, 200, getChat(room ?? undefined));
+      }
       if (req.method === "DELETE") {
-        if (run) return json(res, 409, { error: "A conversation is running - stop it first" });
-        clearChat();
-        broadcast("cleared", {});
+        const room = url.searchParams.get("room") ?? "group";
+        if (!validRoom(room)) return json(res, 400, { error: "Unknown room" });
+        if (runs.has(room)) return json(res, 409, { error: "This chat is still running - pause it first" });
+        clearChat(room);
+        broadcast("cleared", { room });
         return json(res, 200, { ok: true });
       }
       if (req.method === "POST") {
-        if (run) return json(res, 409, { error: "Bots are still talking - wait or press Stop" });
         const body = await readBody(req);
+        const room = String(body.room ?? "group");
+        if (!validRoom(room)) return json(res, 400, { error: "Unknown room" });
+        if (runs.has(room)) return json(res, 409, { error: "Still replying - wait or press Pause" });
         const text = String(body.text ?? "").trim();
-        const participants = (body.participants ?? []).filter((id) => botsById.has(id));
-        const rounds = Math.min(Math.max(Number(body.rounds) || 1, 1), 10);
-        if (!participants.length) return json(res, 400, { error: "Pick at least one bot" });
+        let participants;
+        let rounds;
+        if (isDirect(room)) {
+          participants = [room.slice(3)];
+          rounds = 1;
+        } else {
+          participants = (body.participants ?? []).filter((id) => botsById.has(id));
+          rounds = Math.min(Math.max(Number(body.rounds) || 1, 1), 10);
+          if (!participants.length) return json(res, 400, { error: "Pick at least one bot for the group" });
+        }
         if (text) {
-          broadcast("message", addMessage({ id: randomUUID(), ts: Date.now(), speaker: "You", botId: null, text }));
-        } else if (!getChat().some((m) => !m.hidden)) {
+          broadcast("message", addMessage({ id: randomUUID(), ts: Date.now(), room, speaker: "You", botId: null, text }));
+        } else if (!getChat(room).some((m) => !m.hidden)) {
           return json(res, 400, { error: "Say something to start the conversation" });
         }
-        runConversation(participants, rounds).catch((e) => console.error(e));
+        runConversation(room, participants, rounds).catch((e) => console.error(e));
         return json(res, 202, { ok: true });
       }
     }
 
     if (url.pathname === "/api/stop" && req.method === "POST") {
-      if (run) run.stop = true;
+      const { room } = await readBody(req);
+      for (const [r, run] of runs) if (!room || r === room) run.stop = true;
       return json(res, 200, { ok: true });
     }
 
     if (url.pathname === "/api/usage" && req.method === "GET") {
       const days = url.searchParams.get("days");
       const since = days === "all" ? 0 : Date.now() - (Number(days) || 7) * 86_400_000;
-      return json(res, 200, summarizeUsage(since, cfg.accounts, cfg.bots));
+      const bot = url.searchParams.get("bot");
+      const todayStart = Number(url.searchParams.get("todayStart")) || 0;
+      return json(res, 200, summarizeUsage(since, cfg.accounts, cfg.bots, bot && botsById.has(bot) ? bot : undefined, todayStart));
     }
 
     json(res, 404, { error: "Not found" });

@@ -11,27 +11,30 @@ import { isMock } from "./config.js";
  *   { text, usage: { input, output, cachedInput, cacheWrite }, model, note? }
  */
 
-function toTurns(bot, transcript) {
+function toTurns(bot, transcript, direct = false) {
   const turns = [];
   for (const m of transcript) {
     if (m.hidden) continue;
     const role = m.botId === bot.id ? "assistant" : "user";
-    const content = role === "assistant" ? m.text : `[${m.speaker}]: ${m.text}`;
+    const content = role === "assistant" || direct ? m.text : `[${m.speaker}]: ${m.text}`;
     const last = turns[turns.length - 1];
     if (last && last.role === role) last.content += `\n\n${content}`;
     else turns.push({ role, content });
   }
   // Both APIs want the conversation to start with a user turn and end with one.
   if (!turns.length || turns[0].role !== "user") {
-    turns.unshift({ role: "user", content: "[system]: The group chat is starting." });
+    turns.unshift({ role: "user", content: direct ? "Hi." : "[system]: The group chat is starting." });
   }
   if (turns[turns.length - 1].role !== "user") {
-    turns.push({ role: "user", content: "[system]: Your turn - continue the conversation." });
+    turns.push({ role: "user", content: direct ? "Please continue." : "[system]: Your turn - continue the conversation." });
   }
   return turns;
 }
 
-function groupPreamble(bot, participants) {
+function systemPrompt(bot, participants, direct) {
+  if (direct) {
+    return `${bot.systemPrompt}\n\nYou are "${bot.name}" in a private one-on-one chat with the user.`;
+  }
   const others = participants.filter((p) => p !== bot.name);
   return (
     `${bot.systemPrompt}\n\nYou are "${bot.name}" in a group chat. Other participants: ` +
@@ -43,7 +46,7 @@ function groupPreamble(bot, participants) {
 // ---------- Grok (xAI) ----------
 // xAI's REST API is OpenAI-compatible; called directly with fetch so the
 // project needs no extra SDK.
-async function callXai(bot, account, transcript, participants) {
+async function callXai(bot, account, transcript, ctx) {
   const key = process.env[account.apiKeyEnv];
   if (!key) throw new Error(`No API key: set ${account.apiKeyEnv} for account "${account.name}"`);
   const res = await fetch("https://api.x.ai/v1/chat/completions", {
@@ -51,7 +54,7 @@ async function callXai(bot, account, transcript, participants) {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
     body: JSON.stringify({
       model: bot.model,
-      messages: [{ role: "system", content: groupPreamble(bot, participants) }, ...toTurns(bot, transcript)],
+      messages: [{ role: "system", content: ctx.system }, ...toTurns(bot, transcript, ctx.direct)],
     }),
     signal: AbortSignal.timeout(120_000),
   });
@@ -83,15 +86,15 @@ function anthropicFor(account) {
   return anthropicClients.get(account.id);
 }
 
-async function callAnthropic(bot, account, transcript, participants) {
+async function callAnthropic(bot, account, transcript, ctx) {
   const client = anthropicFor(account);
   let response;
   try {
     response = await client.beta.messages.create({
       model: bot.model,
       max_tokens: 16000,
-      system: groupPreamble(bot, participants),
-      messages: toTurns(bot, transcript),
+      system: ctx.system,
+      messages: toTurns(bot, transcript, ctx.direct),
       output_config: { effort: bot.effort ?? "low" },
       // Caches the growing transcript so each turn only pays full price for new lines.
       cache_control: { type: "ephemeral" },
@@ -158,13 +161,14 @@ async function callMock(bot, account, transcript) {
   };
 }
 
-export async function callBot(bot, account, transcript, participants) {
+export async function callBot(bot, account, transcript, participants, { direct = false } = {}) {
+  const ctx = { direct, system: systemPrompt(bot, participants, direct) };
   if (isMock()) return callMock(bot, account, transcript);
   switch (account.provider) {
     case "xai":
-      return callXai(bot, account, transcript, participants);
+      return callXai(bot, account, transcript, ctx);
     case "anthropic":
-      return callAnthropic(bot, account, transcript, participants);
+      return callAnthropic(bot, account, transcript, ctx);
     default:
       throw new Error(`Unknown provider "${account.provider}" on account "${account.id}"`);
   }

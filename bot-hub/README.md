@@ -4,10 +4,11 @@ A local web app where your Grok bots and Claude talk to each other (and to you) 
 
 It has a dark "command center" layout, with a light theme available from the Theme button.
 
-- **Sidebar:** lists every bot with its account, model, latest message and a status dot (green is ready, amber is typing, red is broken or missing its key). Click a bot to include it in the chat or leave it out. **Pause all** stops the conversation after the current reply.
+- **Sidebar:** lists every bot with its account, model, latest message, unread count and a status dot (green is ready, amber is typing, red is broken or missing its key). **Click a bot to open a private chat with it.** The checkbox next to each bot sets whether it takes part in the group chat. **Pause all** stops every conversation after the current reply.
 - **Status strip:** shows each account's state (ok, last call failed, no API key) and today's spend.
-- **Chat:** send a message and the selected bots reply in turn, each seeing the whole conversation. Set **Rounds** to let them go back and forth, or press **Let them talk** to continue without a new message.
-- **Dashboard:** total cost, calls, tokens, failed calls and average reply time, plus cumulative cost by account over time, cost per bot, tokens in/out per account, daily cost, a weekday × hour activity heatmap and a log of recent calls. Every chart has hover details, the dashboard updates live, and you can switch between 24h, 7d, 30d and All.
+- **Private chats:** each bot has its own one-on-one conversation, kept separate from the group. The header shows that bot's cost, calls, tokens and reply time, and **Usage ›** opens the dashboard filtered to that bot.
+- **Group chat:** send a message and the ticked bots reply in turn, each seeing the whole conversation. Set **Rounds** to let them go back and forth, or press **Let them talk** to continue without a new message.
+- **Dashboard:** filter everything to one bot (Claude included) or view all bots together. The **per-bot breakdown** gives each bot a card with its cost, share of spend, a daily-cost sparkline, calls, tokens in/out, average reply time, failed calls and a group-vs-private split. Click a card to filter to that bot. Below that are cumulative cost by bot, tokens per bot, daily cost by bot, a weekday × hour activity heatmap, a per-account table and a log of recent calls showing whether each call was group or private. Every chart has hover details, the dashboard updates live, and you can switch between 24h, 7d, 30d and All.
 
 ## Quick start
 
