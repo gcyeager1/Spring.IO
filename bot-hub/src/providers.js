@@ -1,5 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { isMock } from "./config.js";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { isMock, isPlan } from "./config.js";
 
 /**
  * Every provider gets the same input: the bot, its account, and the shared
@@ -8,7 +12,8 @@ import { isMock } from "./config.js";
  * with the speaker's name so it can follow a multi-party chat.
  *
  * Every provider returns:
- *   { text, usage: { input, output, cachedInput, cacheWrite }, model, note? }
+ *   { text, usage: { input, output, cachedInput, cacheWrite }, model, note?, apiValue? }
+ * (apiValue: what a subscription-covered call would have cost at API list price)
  */
 
 function toTurns(bot, transcript, direct = false) {
@@ -138,6 +143,94 @@ async function callAnthropic(bot, account, transcript, ctx) {
   };
 }
 
+// ---------- Claude via Claude Code, on your Claude subscription ----------
+// Runs the Claude Code CLI ("claude -p") on this machine for each reply, so
+// Claude's turns use the plan you're signed in to instead of an API key.
+// Personal use only: Anthropic doesn't allow subscription logins to serve
+// other people - use the "anthropic" provider with an API key for that.
+
+// An empty working folder, so Claude Code doesn't pick up this project's files or settings.
+const CC_CWD = path.join(os.tmpdir(), "bot-hub-claude-code");
+fs.mkdirSync(CC_CWD, { recursive: true });
+
+function transcriptText(bot, transcript, direct) {
+  const lines = transcript
+    .filter((m) => !m.hidden)
+    .map((m) => `${m.botId === bot.id ? `${bot.name} (you)` : m.speaker}: ${m.text}`);
+  return lines.length ? lines.join("\n\n") : direct ? "You: Hi." : "(The group chat is just starting.)";
+}
+
+async function callClaudeCode(bot, account, transcript, ctx) {
+  const command = account.command ?? "claude";
+  const args = [
+    "-p",
+    `The conversation so far is above. Write ${bot.name}'s next message only - no name prefix.`,
+    "--output-format", "json",
+    "--system-prompt", ctx.system,
+    "--tools", "", // chat only: no file, shell or web tools
+    "--max-turns", "1",
+    "--no-session-persistence",
+    "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+  ];
+  if (bot.model && bot.model !== "default") args.push("--model", bot.model);
+
+  // An API key in the environment would take priority over the subscription login.
+  const env = { ...process.env };
+  delete env.ANTHROPIC_API_KEY;
+  delete env.ANTHROPIC_AUTH_TOKEN;
+
+  const out = await new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd: CC_CWD, env, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("Claude Code took longer than 3 minutes - stopped"));
+    }, 180_000);
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(
+        err.code === "ENOENT"
+          ? new Error(`Claude Code isn't installed or "${command}" isn't on PATH`)
+          : err,
+      );
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr });
+    });
+    child.stdin.end(transcriptText(bot, transcript, ctx.direct));
+  });
+
+  let data;
+  try {
+    data = JSON.parse(out.stdout);
+  } catch {
+    const detail = (out.stderr || out.stdout).trim().split("\n").slice(-1)[0] || `exit code ${out.code}`;
+    throw new Error(`Claude Code: ${detail}`);
+  }
+  if (data.is_error || data.subtype !== "success") {
+    const msg = String(data.result ?? data.subtype ?? "unknown error");
+    const hint = /log ?in|auth|credential|401/i.test(msg) ? " (run `claude` and use /login to sign in)" : "";
+    throw new Error(`Claude Code: ${msg}${hint}`);
+  }
+  const u = data.usage ?? {};
+  return {
+    text: String(data.result ?? "").trim(),
+    model: Object.keys(data.modelUsage ?? {})[0] ?? bot.model,
+    apiValue: data.total_cost_usd ?? 0,
+    note: data.stop_reason === "max_tokens" ? "reply cut off" : undefined,
+    usage: {
+      input: u.input_tokens ?? 0,
+      cachedInput: u.cache_read_input_tokens ?? 0,
+      cacheWrite: u.cache_creation_input_tokens ?? 0,
+      output: u.output_tokens ?? 0,
+    },
+  };
+}
+
 // ---------- Mock (no keys needed) ----------
 const MOCK_LINES = [
   "Interesting point - I'd push on that a bit more.",
@@ -169,12 +262,15 @@ export async function callBot(bot, account, transcript, participants, { direct =
       return callXai(bot, account, transcript, ctx);
     case "anthropic":
       return callAnthropic(bot, account, transcript, ctx);
+    case "claude-code":
+      return callClaudeCode(bot, account, transcript, ctx);
     default:
       throw new Error(`Unknown provider "${account.provider}" on account "${account.id}"`);
   }
 }
 
-export function costOf(usage, pricing = {}) {
+/** Rough API list-price value of a call, from the account's configured prices. */
+export function listPrice(usage, pricing = {}) {
   const per = (n, p) => ((n ?? 0) * (p ?? 0)) / 1e6;
   return (
     per(usage.input, pricing.inputPerM) +
@@ -182,4 +278,9 @@ export function costOf(usage, pricing = {}) {
     per(usage.cachedInput, pricing.cachedInputPerM ?? pricing.inputPerM) +
     per(usage.cacheWrite, pricing.cacheWritePerM ?? pricing.inputPerM)
   );
+}
+
+/** What a call actually costs you: nothing extra for calls covered by your plan. */
+export function costOf(usage, account) {
+  return isPlan(account) ? 0 : listPrice(usage, account.pricing);
 }

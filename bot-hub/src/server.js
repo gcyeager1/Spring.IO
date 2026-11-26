@@ -2,8 +2,8 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { ROOT, loadConfig, publicConfig, isMock } from "./config.js";
-import { callBot, costOf } from "./providers.js";
+import { ROOT, loadConfig, publicConfig, isMock, isPlan, accountProblem, claudeCodeVersion } from "./config.js";
+import { callBot, costOf, listPrice } from "./providers.js";
 import { addMessage, getChat, clearChat, recordUsage, summarizeUsage, isDirect } from "./store.js";
 import { estimateSend } from "./estimate.js";
 
@@ -30,7 +30,7 @@ async function runConversation(room, participantIds, rounds) {
   const participants = participantIds.map((id) => botsById.get(id));
   const names = ["You", ...participants.map((b) => b.name)];
   const run = { stop: false };
-  const actual = { calls: 0, input: 0, output: 0, cost: 0 };
+  const actual = { calls: 0, input: 0, output: 0, cost: 0, planCalls: 0, apiValue: 0 };
   runs.set(room, run);
   broadcast("status", { running: runningRooms() });
   try {
@@ -48,11 +48,15 @@ async function runConversation(room, participantIds, rounds) {
           error = err?.message ?? String(err);
         }
         const usage = result?.usage ?? { input: 0, cachedInput: 0, cacheWrite: 0, output: 0 };
-        const callCost = costOf(usage, account.pricing);
+        const callCost = costOf(usage, account);
         actual.calls += 1;
         actual.input += usage.input + usage.cachedInput + usage.cacheWrite;
         actual.output += usage.output;
         actual.cost += callCost;
+        if (isPlan(account) && !error) {
+          actual.planCalls += 1;
+          actual.apiValue += result?.apiValue ?? listPrice(usage, account.pricing);
+        }
         recordUsage({
           ts: Date.now(),
           room,
@@ -61,6 +65,9 @@ async function runConversation(room, participantIds, rounds) {
           model: result?.model ?? bot.model,
           ...usage,
           cost: callCost,
+          // Plan-covered calls: keep their API-equivalent value so the dashboard can show it.
+          plan: isPlan(account) || undefined,
+          apiValue: isPlan(account) ? (result?.apiValue ?? listPrice(usage, account.pricing)) : undefined,
           latencyMs: Date.now() - started,
           ok: !error,
           error,
@@ -214,7 +221,12 @@ server.listen(PORT, HOST, () => {
   console.log(`Bot Hub running at http://${shown}:${PORT}`);
   console.log(`Config: ${path.relative(ROOT, cfg.file)}${isMock() ? "  (MOCK mode - no API calls)" : ""}`);
   for (const a of cfg.accounts) {
-    const mark = process.env[a.apiKeyEnv] ? "key set " : "NO KEY  ";
-    console.log(`  [${mark}] ${a.name} (${a.provider}) - reads $${a.apiKeyEnv}`);
+    const problem = accountProblem(a);
+    if (a.provider === "claude-code") {
+      const v = claudeCodeVersion(a.command);
+      console.log(`  [${problem ? "NOT READY" : "ready    "}] ${a.name} (Claude Code on your plan${v ? `, ${v}` : ""})${problem ? ` - ${problem}` : ""}`);
+    } else {
+      console.log(`  [${problem ? "NO KEY   " : "key set  "}] ${a.name} (${a.provider}) - reads $${a.apiKeyEnv}`);
+    }
   }
 });

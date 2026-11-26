@@ -281,3 +281,4 @@ td.err { color: var(--bad); }
 .m-flag.over { color: var(--bad); }
 .m-diff { color: var(--text-3); }
 @media (max-width: 860px) { .dock { position: sticky; bottom: 0; z-index: 3; } .dock .composer { position: static; } }
+.kpi .note { color: var(--text-3); font-size: 11px; }

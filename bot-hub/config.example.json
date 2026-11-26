@@ -28,9 +28,9 @@
     },
     {
       "id": "claude",
-      "name": "Claude",
-      "provider": "anthropic",
-      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "name": "Claude (your plan)",
+      "provider": "claude-code",
+      "_comment": "Uses the Claude Code CLI on this computer and your Claude subscription - no API key. Install Claude Code and sign in once (run `claude`, then /login). Personal use only. To use an API key instead, set provider to \"anthropic\", add \"apiKeyEnv\": \"ANTHROPIC_API_KEY\" and pricing {inputPerM: 4, outputPerM: 20, cachedInputPerM: 0.2, cacheWritePerM: 5}, and set the Claude bot's model to \"claude-opus-5-5\".",
       "pricing": {
         "inputPerM": 4.0,
         "outputPerM": 20.0,
@@ -65,9 +65,9 @@
       "id": "claude",
       "name": "Claude",
       "account": "claude",
-      "model": "claude-opus-5-5",
-      "effort": "low",
-      "systemPrompt": "You are Claude, taking part in a group chat with several Grok-based bots and a human. Keep replies short and conversational."
+      "model": "default",
+      "systemPrompt": "You are Claude, taking part in a group chat with several Grok-based bots and a human. Keep replies short and conversational.",
+      "_model": "\"default\" uses Claude Code's default model for your plan. Or use an alias like \"sonnet\", \"opus\" or \"haiku\"."
     }
   ]
 }

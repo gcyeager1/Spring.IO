@@ -66,6 +66,8 @@ const blank = () => ({
   groupCalls: 0,
   directCost: 0,
   directCalls: 0,
+  planCalls: 0,
+  apiValue: 0,
 });
 function add(acc, u) {
   acc.requests += 1;
@@ -78,6 +80,10 @@ function add(acc, u) {
   if (u.ok && u.latencyMs) {
     acc.latencySum += u.latencyMs;
     acc.latencyN += 1;
+  }
+  if (u.plan) {
+    acc.planCalls += 1;
+    acc.apiValue += u.apiValue ?? 0;
   }
   if (isDirect(roomOf(u))) {
     acc.directCost += u.cost ?? 0;
@@ -111,7 +117,8 @@ export function summarizeUsage(sinceMs, accounts, bots, botFilter, todayStart = 
   for (const u of inRange) {
     const b = (byBot[u.bot] ??= { ...blank(), daily: {} });
     add(b, u);
-    b.daily[day(u.ts)] = (b.daily[day(u.ts)] ?? 0) + (u.cost ?? 0);
+    // Daily trend: dollars spent, or API-equivalent value for calls covered by a plan.
+    b.daily[day(u.ts)] = (b.daily[day(u.ts)] ?? 0) + (u.plan ? (u.apiValue ?? 0) : (u.cost ?? 0));
     add((byAccount[u.account] ??= blank()), u);
   }
 

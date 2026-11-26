@@ -1,4 +1,5 @@
 import { costOf } from "./providers.js";
+import { isPlan } from "./config.js";
 import { getChat, getUsage, isDirect } from "./store.js";
 
 // Rough token count: ~4 characters per token for English text. Real tokenizers
@@ -35,15 +36,16 @@ export function estimateSend(cfg, { room, text, participants, rounds }) {
   if (text) contextChars += text.length + 8;
 
   const perBot = Object.fromEntries(
-    bots.map((b) => [b.id, { bot: b.id, calls: 0, input: 0, output: 0, cost: 0 }]),
+    bots.map((b) => [b.id, { bot: b.id, plan: isPlan(cfg.accountsById.get(b.account)), calls: 0, input: 0, output: 0, cost: 0 }]),
   );
-  const total = { calls: 0, input: 0, output: 0, cost: 0 };
+  const total = { calls: 0, planCalls: 0, input: 0, output: 0, cost: 0 };
   for (let r = 0; r < nRounds; r++) {
     for (const b of bots) {
       const account = cfg.accountsById.get(b.account);
       const input = tokens(b.systemPrompt.length + PROMPT_OVERHEAD_CHARS + contextChars);
       const output = typicalOutput(b.id);
-      const cost = costOf({ input, output, cachedInput: 0, cacheWrite: 0 }, account.pricing);
+      const cost = costOf({ input, output, cachedInput: 0, cacheWrite: 0 }, account);
+      if (isPlan(account)) total.planCalls += 1;
       for (const acc of [perBot[b.id], total]) {
         acc.calls += 1;
         acc.input += input;

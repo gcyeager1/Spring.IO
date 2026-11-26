@@ -66,7 +66,8 @@ const botColor = (id) => {
 };
 const account = (id) => state.config.accounts.find((a) => a.id === id);
 const accountName = (id) => account(id)?.name ?? id;
-const blankStats = () => ({ requests: 0, errors: 0, input: 0, cachedInput: 0, cacheWrite: 0, output: 0, cost: 0, latencyN: 0, latencySum: 0, groupCost: 0, directCost: 0, groupCalls: 0, directCalls: 0, daily: {} });
+const blankStats = () => ({ planCalls: 0, apiValue: 0, requests: 0, errors: 0, input: 0, cachedInput: 0, cacheWrite: 0, output: 0, cost: 0, latencyN: 0, latencySum: 0, groupCost: 0, directCost: 0, groupCalls: 0, directCalls: 0, daily: {} });
+const onPlan = (b) => Boolean(account(b.account)?.plan);
 const tokensIn = (s) => (s.input ?? 0) + (s.cachedInput ?? 0) + (s.cacheWrite ?? 0);
 const avgLatency = (s) => (s.latencyN ? s.latencySum / s.latencyN : 0);
 
@@ -114,7 +115,7 @@ function avatarHtml(b, stateClass = null) {
 
 function botState(b) {
   if ([...state.typing.values()].includes(b.id)) return "busy";
-  if (!state.config.mock && !account(b.account).hasKey) return "bad";
+  if (account(b.account).problem) return "bad";
   const last = state.usage?.lastByBot?.[b.id];
   if (last && !last.ok) return "bad";
   return "on";
@@ -216,9 +217,9 @@ function renderStatus(u) {
       const last = u.lastByAccount[a.id];
       let cls = "idle";
       let info = "ready";
-      if (!state.config.mock && !a.hasKey) {
+      if (a.problem) {
         cls = "bad";
-        info = "no API key";
+        info = a.problem;
       } else if (last && !last.ok) {
         cls = "bad";
         info = `last call failed · ${fmtAgo(last.ts)}`;
@@ -226,7 +227,7 @@ function renderStatus(u) {
         cls = "good";
         info = `ok · ${fmtAgo(last.ts)}`;
       }
-      return `<span class="pill ${cls}" title="${esc(last?.error ?? "")}"><span class="dot"></span>${esc(a.name)} <span class="muted">${esc(info)}</span></span>`;
+      return `<span class="pill ${cls}" title="${esc(last?.error ?? "")}"><span class="dot"></span>${esc(a.name)} <span class="muted">${esc(info)}${a.plan ? " · your plan" : ""}</span></span>`;
     })
     .join("");
   $("#today").innerHTML = `Today <strong>${fmtUSD(u.today.cost)}</strong> · ${u.today.calls} calls`;
@@ -257,11 +258,16 @@ function renderChatStats() {
   }
   const s = state.usage.byBot[dmBot(room)] ?? blankStats();
   el.hidden = false;
-  el.innerHTML = `<span>Cost <strong>${fmtUSD(s.cost)}</strong></span>
+  const costCell = onPlan(bot(dmBot(room)))
+    ? `<span>Cost <strong>on your plan</strong> (≈ ${fmtUSD(s.apiValue)} at API prices)</span>`
+    : `<span>Cost <strong>${fmtUSD(s.cost)}</strong></span>`;
+  el.innerHTML = `${costCell}
     <span>Calls <strong>${s.requests}</strong></span>
     <span>Tokens <strong>${fmtNum(tokensIn(s))} in / ${fmtNum(s.output)} out</strong></span>
     <span>Avg reply <strong>${fmtSecs(avgLatency(s))}</strong></span>
-    <span>Private chat <strong>${fmtUSD(s.directCost)}</strong> · group <strong>${fmtUSD(s.groupCost)}</strong></span>
+    ${onPlan(bot(dmBot(room)))
+      ? `<span>Private chat <strong>${s.directCalls}</strong> calls · group <strong>${s.groupCalls}</strong></span>`
+      : `<span>Private chat <strong>${fmtUSD(s.directCost)}</strong> · group <strong>${fmtUSD(s.groupCost)}</strong></span>`}
     <span>${esc(rangeLabel())}</span>`;
 }
 
@@ -329,7 +335,8 @@ async function send(text) {
   const room = chatRoom() ?? "group";
   const participants = state.config.bots.filter((b) => state.included.has(b.id)).map((b) => b.id);
   if (room === "group" && !participants.length) return setStatus("Tick at least one bot in the sidebar for the group chat.");
-  const est = state.estimate;
+  clearTimeout(estimateTimer);
+  const est = await requestEstimate(); // fresh, so it matches exactly what's being sent
   if (est?.project.budget && est.project.after > est.project.budget) {
     const ok = confirm(`This send is estimated at ${fmtUSD(est.message.cost)}, which would take the project to about ${fmtUSD(est.project.after)} - over your ${fmtUSD(est.project.budget)} budget. Send anyway?`);
     if (!ok) return;
@@ -409,11 +416,12 @@ async function requestEstimate() {
         rounds: Number($("#rounds").value) || 1,
       },
     });
-    if (seq !== estimateSeq) return; // a newer request is on its way
+    if (seq !== estimateSeq) return est; // a newer request is on its way
     state.estimate = est;
     renderMeter();
+    return est;
   } catch {
-    /* the meter is best-effort; keep the last estimate */
+    return state.estimate; // the meter is best-effort; keep the last estimate
   }
 }
 
@@ -425,8 +433,9 @@ function renderMeter() {
   const typed = $("#input").value.trim().length > 0;
   const label = typed ? "This message" : isDm(room) ? "Next reply" : "Let them talk";
   const replies = `${m.calls} repl${m.calls === 1 ? "y" : "ies"}${m.rounds > 1 ? ` over ${m.rounds} rounds` : ""}`;
+  const plan = m.planCalls ? ` <span class="m-diff">(${m.planCalls === m.calls ? "all" : m.planCalls} on your Claude plan)</span>` : "";
   $("#m-msg").innerHTML = m.calls
-    ? `<span class="m-label">${label}</span> ≈ <strong>${fmtUSD(m.cost)}</strong> · ${replies} · ~${fmtNum(m.input)} in / ${fmtNum(m.output)} out`
+    ? `<span class="m-label">${label}</span> ≈ <strong>${fmtUSD(m.cost)}</strong> · ${replies}${plan} · ~${fmtNum(m.input)} in / ${fmtNum(m.output)} out`
     : `<span class="m-label">${label}</span> no bots selected`;
 
   const p = est.project;
@@ -447,7 +456,10 @@ function renderMeter() {
   if (last) {
     const diff = last.est ? ((last.actual.cost - last.est) / last.est) * 100 : 0;
     const where = isDm(last.room) ? botName(dmBot(last.room)) : "group";
-    $("#m-last").innerHTML = `<span class="m-label">Last send (${esc(where)})</span> est ${fmtUSD(last.est)} → actual <strong>${fmtUSD(last.actual.cost)}</strong>
+    const planNote = last.actual.planCalls
+      ? ` <span class="m-diff">+ ${last.actual.planCalls} on your plan (≈ ${fmtUSD(last.actual.apiValue)} at API prices)</span>`
+      : "";
+    $("#m-last").innerHTML = `<span class="m-label">Last send (${esc(where)})</span> est ${fmtUSD(last.est)} → actual <strong>${fmtUSD(last.actual.cost)}</strong>${planNote}
       ${last.est ? `<span class="m-diff">(${diff >= 0 ? "+" : ""}${diff.toFixed(0)}%)</span>` : ""}`;
   }
 }
@@ -459,7 +471,7 @@ function wireMeter() {
     showTip(
       e,
       `<div class="t-head">Estimate by bot</div>${m.perBot
-        .map((r) => tipRow(botColor(r.bot), `${botName(r.bot)} ×${r.calls}`, `${fmtUSD(r.cost)} · ~${fmtNum(r.input)} in / ${fmtNum(r.output)} out`))
+        .map((r) => tipRow(botColor(r.bot), `${botName(r.bot)} ×${r.calls}`, `${r.plan ? "your plan" : fmtUSD(r.cost)} · ~${fmtNum(r.input)} in / ${fmtNum(r.output)} out`))
         .join("")}<div class="t-row"><span>Rough guide: ~4 characters per token, replies sized like each bot's recent ones.</span></div>`,
     );
   });
@@ -734,7 +746,8 @@ function renderFilter() {
 
 function renderKpis(u) {
   const t = u.total;
-  const kpi = (label, value, cls = "") => `<div class="kpi"><div class="label">${label}</div><div class="value ${cls}">${value}</div></div>`;
+  const kpi = (label, value, cls = "", note = "") =>
+    `<div class="kpi"><div class="label">${label}</div><div class="value ${cls}">${value}</div>${note ? `<div class="note">${note}</div>` : ""}</div>`;
   $("#kpis").innerHTML =
     kpi("Total cost", fmtUSD(t.cost)) +
     kpi("Calls", t.requests) +
@@ -743,7 +756,10 @@ function renderKpis(u) {
     kpi("Group chat", fmtUSD(t.groupCost)) +
     kpi("Private chats", fmtUSD(t.directCost)) +
     kpi("Failed calls", t.errors, t.errors ? "bad" : "") +
-    kpi("Avg reply time", fmtSecs(avgLatency(t)));
+    kpi("Avg reply time", fmtSecs(avgLatency(t))) +
+    (state.config.accounts.some((a) => a.plan)
+      ? kpi("Calls on your Claude plan", t.planCalls, "", `≈ ${fmtUSD(t.apiValue)} at API prices`)
+      : "");
 }
 
 function renderBotCards(u) {
@@ -753,13 +769,22 @@ function renderBotCards(u) {
     .map((b) => {
       const s = u.byBot[b.id] ?? blankStats();
       const c = botColor(b.id);
+      const plan = onPlan(b);
       const share = all ? (s.cost / all) * 100 : 0;
-      const gShare = s.cost ? (s.groupCost / s.cost) * 100 : 0;
+      // Plan-covered bots cost nothing per call, so split them by calls instead of dollars.
+      const gShare = plan
+        ? (s.requests ? (s.groupCalls / s.requests) * 100 : 0)
+        : s.cost ? (s.groupCost / s.cost) * 100 : 0;
+      const splitHas = plan ? s.requests : s.cost;
+      const fmtSplit = (cost, calls) => (plan ? `${calls} calls` : fmtUSD(cost));
       return `<button type="button" class="bot-card ${state.botFilter === b.id ? "on" : ""}" data-bot="${esc(b.id)}"
           aria-pressed="${state.botFilter === b.id}" title="Show only ${esc(b.name)} in the charts">
         <span class="top">${avatarHtml(b, botState(b))}<span><span class="nm">${esc(b.name)}</span><br><span class="meta">${esc(accountName(b.account))} · ${esc(b.model)}</span></span></span>
-        <span class="cost">${fmtUSD(s.cost)}<small>${share.toFixed(0)}% of spend</small></span>
-        <span class="share"><span style="width:${share}%;background:${c}"></span></span>
+        ${plan
+          ? `<span class="cost">Your plan<small>≈ ${fmtUSD(s.apiValue)} at API prices</small></span>
+             <span class="share" title="No per-call charge: covered by your Claude subscription"></span>`
+          : `<span class="cost">${fmtUSD(s.cost)}<small>${share.toFixed(0)}% of spend</small></span>
+             <span class="share"><span style="width:${share}%;background:${c}"></span></span>`}
         ${sparkline(s.daily ?? {}, days, c)}
         <dl>
           <dt>Calls</dt><dd>${s.requests}</dd>
@@ -767,10 +792,10 @@ function renderBotCards(u) {
           <dt>Avg reply</dt><dd>${fmtSecs(avgLatency(s))}</dd>
           <dt>Failed</dt><dd class="${s.errors ? "bad" : ""}">${s.errors}</dd>
         </dl>
-        <span class="split" title="Group chat ${fmtUSD(s.groupCost)} · private chat ${fmtUSD(s.directCost)}">
-          ${s.cost ? `<span style="width:${gShare}%;background:${c}"></span><span style="flex:1;background:${c};opacity:.4"></span>` : ""}
+        <span class="split" title="Group chat ${fmtSplit(s.groupCost, s.groupCalls)} · private chat ${fmtSplit(s.directCost, s.directCalls)}">
+          ${splitHas ? `<span style="width:${gShare}%;background:${c}"></span><span style="flex:1;background:${c};opacity:.4"></span>` : ""}
         </span>
-        <span class="split-legend"><span>Group ${fmtUSD(s.groupCost)}</span><span>Private ${fmtUSD(s.directCost)}</span></span>
+        <span class="split-legend"><span>Group ${fmtSplit(s.groupCost, s.groupCalls)}</span><span>Private ${fmtSplit(s.directCost, s.directCalls)}</span></span>
       </button>`;
     })
     .join("");
@@ -799,7 +824,7 @@ function renderRecent(u) {
         <td>${esc(r.model ?? "")}</td>
         <td class="num">${fmtNum(tokensIn(r))}</td>
         <td class="num">${fmtNum(r.output ?? 0)}</td>
-        <td class="num">${fmtUSD(r.cost ?? 0)}</td>
+        <td class="num">${r.plan ? `<span title="≈ ${fmtUSD(r.apiValue ?? 0)} at API prices">plan</span>` : fmtUSD(r.cost ?? 0)}</td>
         <td class="num">${fmtSecs(r.latencyMs)}</td>
         <td class="${r.ok ? "" : "err"}">${r.ok ? "ok" : esc(r.error ?? "error")}</td>
       </tr>`,

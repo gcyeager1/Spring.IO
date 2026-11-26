@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,6 +18,28 @@ export function loadConfig() {
   return { ...cfg, file, accountsById: accounts };
 }
 
+/** Accounts paid for by a subscription (Claude Code on your plan) cost nothing per call. */
+export const isPlan = (account) => account.provider === "claude-code";
+
+// Whether the Claude Code CLI can be run, checked once per command.
+const cliChecks = new Map();
+export function claudeCodeVersion(command = "claude") {
+  if (!cliChecks.has(command)) {
+    const r = spawnSync(command, ["--version"], { encoding: "utf8", timeout: 15_000 });
+    cliChecks.set(command, r.status === 0 ? r.stdout.trim() : null);
+  }
+  return cliChecks.get(command);
+}
+
+/** Why an account can't make calls right now, or null if it looks ready. */
+export function accountProblem(account) {
+  if (isMock()) return null;
+  if (account.provider === "claude-code") {
+    return claudeCodeVersion(account.command) ? null : "Claude Code not found - install it and log in";
+  }
+  return process.env[account.apiKeyEnv] ? null : "no API key";
+}
+
 /** Config safe to send to the browser: no key env var names or values. */
 export function publicConfig(cfg) {
   return {
@@ -25,7 +48,8 @@ export function publicConfig(cfg) {
       id: a.id,
       name: a.name,
       provider: a.provider,
-      hasKey: Boolean(process.env[a.apiKeyEnv]),
+      plan: isPlan(a),
+      problem: accountProblem(a),
     })),
     bots: cfg.bots.map((b) => ({ id: b.id, name: b.name, account: b.account, model: b.model })),
   };
