@@ -311,7 +311,7 @@ const server = http.createServer(async (req, res) => {
       return void fs.createReadStream(path.join(ROOT, "public", url.pathname)).pipe(res);
     }
 
-    // Cross-site writes are refused (cookies are SameSite=Strict as well).
+    // Cross-site writes are refused (cookies are SameSite=Lax; the Origin/Host check is the CSRF guard).
     if (req.method !== "GET" && req.method !== "HEAD" && req.headers.origin) {
       let same = false;
       try { same = new URL(req.headers.origin).host === req.headers.host; } catch {}

@@ -283,13 +283,34 @@ td.err { color: var(--bad); }
 @media (max-width: 860px) { .dock { position: sticky; bottom: 0; z-index: 3; } .dock .composer { position: static; } }
 .kpi .note { color: var(--text-3); font-size: 11px; }
 
-.plan-usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.plan-usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; margin-bottom: 16px; }
 .plan-card { display: flex; flex-direction: column; gap: 6px; }
-.plan-bots { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.plan-bots li { display: flex; justify-content: space-between; gap: 8px; }
+.plan-body { display: flex; gap: 14px; align-items: center; }
+.plan-body .pie { flex: none; width: 120px; height: 120px; }
+.plan-bots { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; font-size: 13px; }
+.plan-bots li { display: flex; align-items: center; gap: 6px; }
+.plan-bots .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-bots .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .plan-bots li.leftover { font-style: italic; }
+.small { font-size: 11px; }
 
-/* Real agents (webhook bridge) */
-.real-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 10px; font-weight: 500; color: var(--text-2); vertical-align: middle; }
-.msg.sys { align-self: center; max-width: 620px; }
-.msg.sys .bubble { background: transparent; border-style: dashed; color: var(--text-2); font-size: 12px; }
+/* Estimate chip above the composer; details behind a tap */
+.meter { display: block; padding: 4px 16px 0; border-top: 0; }
+.m-chip { background: transparent; border: 0; color: var(--text-3); font-size: 12px; padding: 2px 0; cursor: pointer; }
+.m-detail { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; font-size: 12px; color: var(--text-2); }
+
+/* Phone-first tightening */
+@media (max-width: 860px) {
+  body { font-size: 15px; }
+  .view { padding-left: 12px; padding-right: 12px; }
+  .card { padding: 10px 12px; border-radius: 8px; }
+  .meter { padding: 2px 12px 0; }
+  .composer { padding: 6px 12px 10px; gap: 6px; border-top: 0; }
+  .composer textarea { font-size: 16px; min-height: 44px; border: 2px solid var(--accent); border-radius: 22px; padding: 10px 14px; }
+  #send-btn { width: 44px; height: 44px; }
+  .plan-body { gap: 10px; }
+  .plan-body .pie { width: 104px; height: 104px; }
+  .kpis { gap: 6px; }
+  .chat-stats, .side-hint { display: none; }
+}
+@media (max-width: 420px) { .plan-body { flex-direction: column; align-items: stretch; } .plan-body .pie { align-self: center; } }

@@ -29,7 +29,9 @@ export default function App() {
   // Keep the app on the hub; open anything else in the phone's browser.
   const onShouldStart = useCallback((req) => {
     try {
-      if (new URL(req.url).host === HUB_HOST) return true;
+      const host = new URL(req.url).host;
+      // Stay in the WebView for the hub and its Railway host; leaving would drop the session.
+      if (host === HUB_HOST || host.endsWith(".up.railway.app")) return true;
     } catch {}
     Linking.openURL(req.url).catch(() => {});
     return false;
@@ -59,7 +61,7 @@ export default function App() {
           source={{ uri: HUB_URL }}
           style={styles.web}
           sharedCookiesEnabled
-          thirdPartyCookiesEnabled={false}
+          thirdPartyCookiesEnabled={true}
           javaScriptEnabled
           domStorageEnabled
           setSupportMultipleWindows={false}

@@ -62,7 +62,7 @@ test("login success sets a secure-flagged httpOnly SameSite cookie", async () =>
   assert.equal(res.status, 200);
   const raw = res.headers.get("set-cookie");
   assert.match(raw, /HttpOnly/);
-  assert.match(raw, /SameSite=Strict/);
+  assert.match(raw, /SameSite=Lax/);
   assert.doesNotMatch(raw, /Secure/); // plain HTTP and proxy trust off -> no Secure
   assert.ok(!raw.includes(PASSWORD));
   cookie = cookieOf(res);
