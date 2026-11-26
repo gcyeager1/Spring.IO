@@ -206,7 +206,7 @@ async function setView(view) {
   $("#view-chat").hidden = !chat;
   $("#view-dash").hidden = view !== "dash";
   $("#view-settings").hidden = view !== "settings";
-  if (view === "settings") { loadFeedKeys(); loadBridge(); loadReplyTokens(); }
+  if (view === "settings") { loadFeedKeys(); loadBridge(); loadReplyTokens(); loadTeamBrief(); }
   if (chat) {
     delete state.unread[view];
     if (!state.rooms.has(view)) state.rooms.set(view, await api(`/api/messages?room=${encodeURIComponent(view)}`));
@@ -398,6 +398,18 @@ function initReplyTokens() {
   });
 }
 initReplyTokens();
+
+async function loadTeamBrief() {
+  $("#tb-msg").textContent = "";
+  try { $("#tb-text").value = (await api("/api/team-brief")).text; } catch (e) { $("#tb-msg").textContent = e.message; }
+}
+$("#tb-save").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/team-brief", { method: "PUT", body: { text: $("#tb-text").value } });
+    $("#tb-text").value = r.text;
+    $("#tb-msg").textContent = "Saved.";
+  } catch (e) { $("#tb-msg").textContent = e.message; }
+});
 
 // ======================= Status strip =======================
 
