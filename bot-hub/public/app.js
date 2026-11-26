@@ -2,7 +2,7 @@
 // status strip and a usage dashboard with per-bot breakdowns.
 // No build step, no dependencies. Charts are hand-built SVG.
 
-import { fmtShare, fmtPercentUsed, fmtResetEastern, fmtAgo as fmtReportAgo, isLeftoverBucket, reportFor } from "/planusage.js";
+import { fmtShare, fmtPercentUsed, fmtResetEastern, fmtAgo as fmtReportAgo, isLeftoverBucket, reportFor, poolSlices, pieSvg, sliceColor, fmtPoolShare, EMPTY_PLAN_TEXT } from "/planusage.js";
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) =>
@@ -621,6 +621,7 @@ function renderMeter() {
   const est = state.estimate;
   if (!est) return;
   const m = est.message;
+  $("#m-chip").textContent = m.calls ? `Est. ~${fmtUSD(m.cost)}` : "Est. –";
   const room = meterRoom();
   const typed = $("#input").value.trim().length > 0;
   const label = typed ? "This message" : isDm(room) ? "Next reply" : "Let them talk";
@@ -657,6 +658,11 @@ function renderMeter() {
 }
 
 function wireMeter() {
+  $("#m-chip").addEventListener("click", () => {
+    const d = $("#m-detail");
+    d.hidden = !d.hidden;
+    $("#m-chip").setAttribute("aria-expanded", String(!d.hidden));
+  });
   $("#m-msg").addEventListener("mousemove", (e) => {
     const m = state.estimate?.message;
     if (!m?.perBot?.length) return;
@@ -1010,27 +1016,23 @@ function renderPreviousBots(u) {
   el.innerHTML = `<h2 class="section">Previous bots</h2><div class="table-wrap"><table><thead><tr><th>Bot (retired id / earlier account)</th><th class="num">Calls</th><th class="num">Tokens in / out</th><th class="num">Cost</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-// Grok subscription usage reports (ingested via POST /api/plan-usage), separate from Bot Hub chat usage.
+// Subscription usage reports (ingested via POST /api/plan-usage): one donut per account, slices total 100% of the weekly pool.
 function renderPlanUsage(u) {
   const html = [["lifteasy", "grok-1"], ["garrett", "grok-2"]]
     .map(([key, acctId]) => {
       const r = reportFor(u.planUsage, key);
-      const label = accountName(acctId);
-      const title = `Grok subscription (${esc(r?.plan ?? "Ultra")} weekly)`;
-      if (!r) return `<figure class="card plan-card"><figcaption><span class="card-title">${title}</span><span class="muted">${esc(label)}</span></figcaption><p class="muted">No usage report yet</p></figure>`;
-      const pct = Math.min(Math.max(r.percentUsed, 0), 100);
-      const bots = (r.bots ?? [])
-        .map((b) => `<li class="${isLeftoverBucket(b.name) ? "leftover muted" : ""}"><span>${esc(b.name)}</span><span class="num">${fmtShare(b.sharePct)}</span></li>`)
+      const title = esc(accountName(acctId));
+      if (!r) return `<figure class="card plan-card"><figcaption><span class="card-title">${title}</span></figcaption><p class="muted">${EMPTY_PLAN_TEXT}</p></figure>`;
+      const { slices } = poolSlices(r);
+      const legend = slices
+        .map((s, i) => `<li class="${s.leftover ? "leftover muted" : ""}"><span class="dot" style="background:${sliceColor(s, i)}"></span><span class="nm">${esc(s.name)}</span><span class="num">${fmtPoolShare(s.pct)}</span></li>`)
         .join("");
+      const extra = [r.onDemand ? esc(r.onDemand) : "", `updated ${esc(fmtReportAgo(r.reportedAt))}`].filter(Boolean).join(" · ");
       return `<figure class="card plan-card">
-        <figcaption><span class="card-title">${title}</span><span class="muted">${esc(label)}</span></figcaption>
-        <div><strong>${esc(r.plan ?? "Plan")}</strong> · ${fmtPercentUsed(r.percentUsed)} used</div>
-        <div class="share" role="img" aria-label="${fmtPercentUsed(r.percentUsed)} used"><span style="width:${pct}%;background:var(--accent)"></span></div>
-        <div class="muted">Resets ${r.resetsAt ? esc(fmtResetEastern(r.resetsAt)) : "unknown"} (Eastern)</div>
-        <div class="muted">${r.onDemand ? esc(r.onDemand) : "No credits info reported"}</div>
-        <div class="muted" title="Each share is a percentage of the ${fmtPercentUsed(r.percentUsed)} already used, not of the whole allowance">Share of used amount</div>
-        <ul class="plan-bots">${bots}</ul>
-        <div class="muted">updated ${esc(fmtReportAgo(r.reportedAt))}</div>
+        <figcaption><span class="card-title">${title}</span><span class="muted">${esc(r.plan ?? "")} · ${fmtPercentUsed(r.percentUsed)} used</span></figcaption>
+        <div class="plan-body">${pieSvg(slices)}<ul class="plan-bots">${legend}</ul></div>
+        <div class="muted small">Resets ${r.resetsAt ? esc(fmtResetEastern(r.resetsAt)) : "unknown"} ET</div>
+        <div class="muted small">${extra}</div>
       </figure>`;
     })
     .join("");

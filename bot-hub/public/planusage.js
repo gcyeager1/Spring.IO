@@ -69,3 +69,58 @@ export function validateReport(b) {
     },
   };
 }
+
+// ---------- Pool pie (each account's weekly pool = 100%) ----------
+
+export const EMPTY_PLAN_TEXT = "Waiting for usage data";
+
+/** Pool-share formatting: under 1 (but above 0) is "<1%"; otherwise one decimal, trimmed ("3.9%", "91.9%", "48%"). */
+export function fmtPoolShare(pct) {
+  const n = Number(pct);
+  if (!Number.isFinite(n) || n <= 0) return "0%";
+  if (n < 1) return "<1%";
+  return `${+n.toFixed(1)}%`;
+}
+
+/**
+ * Slices of the weekly pool for one report. Each bot's slice is percentUsed * sharePct / 100;
+ * Remaining pads the total to 100. Slices are scaled down only if they overshoot 100.
+ * Returns { slices: [{ name, pct, leftover, remaining }], total } where total is 100 (or 0 for bad input).
+ */
+export function poolSlices(report) {
+  const used = Number(report?.percentUsed);
+  if (!report || !Number.isFinite(used)) return { slices: [], total: 0 };
+  const u = Math.min(Math.max(used, 0), 100);
+  let slices = (report.bots ?? []).map((b) => ({
+    name: String(b.name),
+    pct: Math.max(0, (u * (Number(b.sharePct) || 0)) / 100),
+    leftover: isLeftoverBucket(b.name),
+    remaining: false,
+  }));
+  const sum = slices.reduce((a, s) => a + s.pct, 0);
+  if (sum > 100) slices = slices.map((s) => ({ ...s, pct: (s.pct * 100) / sum }));
+  const rest = Math.max(0, 100 - Math.min(sum, 100));
+  slices.push({ name: "Remaining", pct: rest, leftover: false, remaining: true });
+  return { slices, total: 100 };
+}
+
+const PIE_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)", "var(--series-7)", "var(--series-8)"];
+export const sliceColor = (s, i) => (s.remaining ? "var(--surface-3)" : s.leftover ? "var(--series-other)" : PIE_COLORS[i % PIE_COLORS.length]);
+
+/** SVG donut markup (no dependencies). Zero-size slices are skipped; pure so tests can inspect it. */
+export function pieSvg(slices, size = 120) {
+  const c = size / 2, r = size / 2 - 2, ri = r * 0.58;
+  const pt = (rad, a) => `${(c + rad * Math.sin(a)).toFixed(3)},${(c - rad * Math.cos(a)).toFixed(3)}`;
+  const total = slices.reduce((a, s) => a + s.pct, 0) || 100;
+  let a0 = 0;
+  const paths = [];
+  slices.forEach((s, i) => {
+    if (s.pct <= 0) return;
+    const frac = Math.min(s.pct / total, 0.99999);
+    const a1 = a0 + frac * 2 * Math.PI;
+    const big = frac > 0.5 ? 1 : 0;
+    paths.push(`<path d="M${pt(r, a0)}A${r},${r} 0 ${big} 1 ${pt(r, a1)}L${pt(ri, a1)}A${ri},${ri} 0 ${big} 0 ${pt(ri, a0)}Z" fill="${sliceColor(s, i)}"><title>${s.name.replace(/[<>&"]/g, "")} ${fmtPoolShare(s.pct)}</title></path>`);
+    a0 = a1;
+  });
+  return `<svg class="pie" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="Weekly pool">${paths.join("")}</svg>`;
+}

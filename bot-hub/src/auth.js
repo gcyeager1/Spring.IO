@@ -139,7 +139,7 @@ export function parseCookies(header = "") {
 }
 
 export function sessionCookie(token, maxAgeS, secure) {
-  return `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAgeS}${secure ? "; Secure" : ""}`;
+  return `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeS}${secure ? "; Secure" : ""}`;
 }
 
 // ---------- login rate limiting ----------

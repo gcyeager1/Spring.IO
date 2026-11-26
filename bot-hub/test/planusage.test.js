@@ -97,3 +97,36 @@ test("helpers: <1% formatting, leftover bucket, empty account", () => {
   assert.equal(validateReport(FIXTURE).report.bots.length, 6);
   assert.ok(validateReport({ ...FIXTURE, bots: [{ name: "a" }] }).error);
 });
+
+import { poolSlices, fmtPoolShare, pieSvg, EMPTY_PLAN_TEXT } from "../public/planusage.js";
+
+test("pool slices: share of the weekly pool, Remaining pads to 100", () => {
+  const { slices } = poolSlices(FIXTURE);
+  const ass = slices.find((s) => s.name === "Asschub");
+  assert.ok(Math.abs(ass.pct - 3.888) < 1e-9);
+  assert.equal(fmtPoolShare(ass.pct), "3.9%");
+  const rem = slices.at(-1);
+  assert.equal(rem.name, "Remaining");
+  const botSum = slices.slice(0, -1).reduce((a, s) => a + s.pct, 0);
+  assert.ok(Math.abs(rem.pct - (100 - botSum)) < 1e-9);
+  assert.ok(Math.abs(slices.reduce((a, s) => a + s.pct, 0) - 100) < 1e-9);
+});
+
+test("pool slices: shares summing to 100 leave Remaining = 100 - percentUsed; tiny slices read <1%", () => {
+  const r = { percentUsed: 8.1, bots: [{ name: "A", sharePct: 50 }, { name: "B", sharePct: 49.5 }, { name: LEFTOVER, sharePct: 0.5 }] };
+  const { slices } = poolSlices(r);
+  assert.ok(Math.abs(slices.at(-1).pct - 91.9) < 1e-9);
+  const left = slices.find((s) => s.leftover);
+  assert.equal(fmtPoolShare(left.pct), "<1%");
+  assert.equal(fmtPoolShare(91.9), "91.9%");
+  assert.equal(fmtPoolShare(0), "0%");
+  assert.match(pieSvg(slices), /<svg class="pie"/);
+});
+
+test("pool slices never exceed 100 and empty state text", () => {
+  const { slices } = poolSlices({ percentUsed: 90, bots: [{ name: "A", sharePct: 80 }, { name: "B", sharePct: 80 }] });
+  assert.ok(Math.abs(slices.reduce((a, s) => a + s.pct, 0) - 100) < 1e-9);
+  assert.equal(slices.at(-1).pct, 0);
+  assert.equal(poolSlices(null).slices.length, 0);
+  assert.equal(EMPTY_PLAN_TEXT, "Waiting for usage data");
+});
