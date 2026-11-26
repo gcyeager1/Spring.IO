@@ -207,3 +207,75 @@ test("garrett token survives restart in the data dir; lifteasy reveal with env u
     assert.ok(!fs.readdirSync(s.dataDir).some((f) => /lifteasy/.test(f)));
   });
 });
+
+const selfReg = (s, id, token, body, method = "PUT", extra = {}) => fetch(`${s.base}/api/bridge/${id}/self-register`, {
+  method, headers: { "Content-Type": "application/json", ...(token === null ? {} : { Authorization: `Bearer ${token}` }), ...extra },
+  body: method === "PUT" ? JSON.stringify(body ?? {}) : undefined,
+});
+
+test("self-register: 401s and account scoping (cookie alone is not enough)", async () => {
+  await withServer({ BOTHUB_REPLY_TOKEN: REPLY }, async (s, h) => {
+    const gt = await garrettToken(s, h);
+    const good = { url: GOOD, key: VOL_KEY };
+    assert.equal((await selfReg(s, "asschub", null, good)).status, 401);
+    assert.equal((await selfReg(s, "asschub", "", good, "PUT", { Authorization: "Bearer " })).status, 401);
+    assert.equal((await selfReg(s, "asschub", "wrong", good)).status, 401);
+    assert.equal((await selfReg(s, "asschub", null, good, "PUT", h)).status, 401); // cookie alone
+    assert.equal((await selfReg(s, "dummy", REPLY, good)).status, 403);
+    assert.equal((await selfReg(s, "asschub", gt, good)).status, 403);
+    assert.equal((await selfReg(s, "claude", REPLY, good)).status, 400);
+    assert.equal((await selfReg(s, "nova", gt, good)).status, 400);
+    assert.equal((await selfReg(s, "rook", REPLY, good)).status, 400);
+    assert.equal((await selfReg(s, "sage", gt, good)).status, 400);
+    assert.deepEqual(await view(s, h).then((b) => b.filter((x) => x.source === "volume")), []);
+  });
+});
+
+test("self-register: PUT stores to the volume, leaks nothing, bad input persists nothing", async () => {
+  await withServer({ BOTHUB_REPLY_TOKEN: REPLY }, async (s, h) => {
+    const gt = await garrettToken(s, h);
+    const r = await selfReg(s, "dummy", gt, { url: GOOD, key: VOL_KEY });
+    assert.equal(r.status, 200);
+    const text = await r.text();
+    assert.deepEqual(JSON.parse(text), { ok: true, botId: "dummy", set: true });
+    assert.ok(!text.includes(VOL_KEY) && !text.includes(GOOD));
+    const d = (await view(s, h)).find((b) => b.id === "dummy");
+    assert.equal(d.keySet, true);
+    assert.equal(d.source, "volume");
+    assert.equal(fs.statSync(path.join(s.dataDir, "bridge-webhooks.json")).mode & 0o777, 0o600);
+    const l = await selfReg(s, "asschub", REPLY, { url: GOOD, key: VOL_KEY });
+    assert.equal(l.status, 200);
+    for (const body of [{ url: GOOD }, { key: VOL_KEY }, { url: "http://api2.cursor.sh/automations/webhook/a", key: VOL_KEY },
+      { url: "https://evilcursor.sh/automations/webhook/a", key: VOL_KEY }, { url: "https://api2.cursor.sh/other", key: VOL_KEY }]) {
+      assert.equal((await selfReg(s, "pawn", gt, body)).status, 400);
+    }
+    assert.equal((await view(s, h)).find((b) => b.id === "pawn").source, "none");
+    const out = s.output();
+    for (const secret of [VOL_KEY, REPLY, gt]) assert.ok(!out.includes(secret));
+    assert.ok(out.includes("bridge self-register for dummy"));
+  });
+});
+
+test("self-register: DELETE is account-scoped, clears volume, env fallback returns", async () => {
+  await withServer({ BOTHUB_REPLY_TOKEN: REPLY, BOTHUB_WEBHOOK_URL_ASSCHUB: GOOD, BOTHUB_WEBHOOK_KEY_ASSCHUB: ENV_KEY }, async (s, h) => {
+    const gt = await garrettToken(s, h);
+    assert.equal((await selfReg(s, "asschub", REPLY, { url: GOOD, key: VOL_KEY })).status, 200);
+    assert.equal((await view(s, h)).find((b) => b.id === "asschub").source, "volume");
+    assert.equal((await selfReg(s, "asschub", gt, null, "DELETE")).status, 403);
+    assert.equal((await selfReg(s, "asschub", null, null, "DELETE")).status, 401);
+    const dr = await selfReg(s, "asschub", REPLY, null, "DELETE");
+    assert.equal(dr.status, 200);
+    assert.deepEqual(await dr.json(), { ok: true, botId: "asschub", set: false });
+    assert.equal((await view(s, h)).find((b) => b.id === "asschub").source, "env");
+    for (const secret of [VOL_KEY, REPLY, gt, ENV_KEY]) assert.ok(!s.output().includes(secret));
+  });
+});
+
+test("self-register: 11th attempt from one IP in an hour is 429 with Retry-After", async () => {
+  await withServer({ BOTHUB_REPLY_TOKEN: REPLY }, async (s) => {
+    for (let i = 0; i < 10; i++) assert.equal((await selfReg(s, "asschub", "bad", {})).status, 401);
+    const r = await selfReg(s, "asschub", REPLY, { url: GOOD, key: VOL_KEY });
+    assert.equal(r.status, 429);
+    assert.ok(Number(r.headers.get("retry-after")) > 0);
+  });
+});
