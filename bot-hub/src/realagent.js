@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "./config.js";
+import { lookupWebhook } from "./bridge-store.js";
 
 // Fixed on purpose: never taken from the client, the environment or the request.
 export const REPLY_URL = "https://bots.ezliftgaragedoorservice.com/api/agent-reply";
@@ -24,15 +25,8 @@ export function nowMs() {
   return Date.now();
 }
 
-const envSuffix = (botId) => String(botId).toUpperCase().replace(/-/g, "_");
-
-/** Webhook config for a bot, or null unless BOTH url and key are set and non-empty. */
-export function webhookFor(botId) {
-  const s = envSuffix(botId);
-  const url = (process.env[`BOTHUB_WEBHOOK_URL_${s}`] ?? "").trim();
-  const key = (process.env[`BOTHUB_WEBHOOK_KEY_${s}`] ?? "").trim();
-  return url && key ? { url, key } : null;
-}
+/** Webhook config for a bot (volume entry first, then env), or null unless both url and key exist. */
+export const webhookFor = (botId) => lookupWebhook(botId);
 export const isRealAgent = (bot) => Boolean(webhookFor(bot.id));
 
 /** Real bots may only run 7:00 <= hour-in-New-York < 21:00. */

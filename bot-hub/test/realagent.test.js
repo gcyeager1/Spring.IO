@@ -44,7 +44,12 @@ const login = async (s) => {
 };
 const send = (s, h, body) => postJson(s.base + "/api/messages", body, h);
 const msgs = async (s, h, room = "group") => (await fetch(`${s.base}/api/messages?room=${encodeURIComponent(room)}`, { headers: h })).json();
-const reply = (s, body, token = REPLY) => postJson(s.base + "/api/agent-reply", body, token === null ? {} : { Authorization: `Bearer ${token}` });
+const GARRETT_BOTS = ["dummy", "crm-builder", "leads-garrett", "ads", "socials", "pawn"];
+// Default bearer: the env token for Lifteasy bots, the generated garrett token for garrett bots.
+const reply = (s, body, token) => {
+  const t = token === undefined ? (GARRETT_BOTS.includes(body.bot_id) ? s.garrettToken : REPLY) : token;
+  return postJson(s.base + "/api/agent-reply", body, t === null ? {} : { Authorization: `Bearer ${t}` });
+};
 const until = async (fn, ms = 3000) => {
   const end = Date.now() + ms;
   while (Date.now() < end) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 30)); }
@@ -58,7 +63,11 @@ beforeEach(() => { hits.length = 0; mode = "ok"; });
 
 async function withServer(extra, seed, fn) {
   const s = await startServer(envFor(extra), seed);
-  try { await fn(s, await login(s)); } finally { await s.stop(); }
+  try {
+    const h = await login(s);
+    s.garrettToken = (await (await postJson(s.base + "/api/reply-tokens/garrett/reveal", {}, h)).json()).token;
+    await fn(s, h);
+  } finally { await s.stop(); }
 }
 const wake = async (s, h, text, room = "group", participants = ["asschub"]) => {
   const r = await send(s, h, { room, text, participants });
@@ -235,6 +244,7 @@ test("agent-reply auth: missing/wrong/empty bearer -> 401, and other /api routes
     assert.equal((await reply(s, body, "")).status, 401);
     assert.equal((await postJson(s.base + "/api/agent-reply", body, { Authorization: "Bearer" })).status, 401);
     assert.equal((await reply(s, body)).status, 404); // right token, no such job
+    assert.equal((await reply(s, body, REPLY)).status, 403); // env token is not valid for a garrett bot
     for (const p of ["/api/config", "/api/messages", "/api/usage"]) assert.equal((await fetch(s.base + p)).status, 401);
     assert.equal((await postJson(s.base + "/api/messages", { text: "x" })).status, 401);
     // A cross-origin browser write is still refused.

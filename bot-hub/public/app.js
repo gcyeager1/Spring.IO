@@ -206,7 +206,7 @@ async function setView(view) {
   $("#view-chat").hidden = !chat;
   $("#view-dash").hidden = view !== "dash";
   $("#view-settings").hidden = view !== "settings";
-  if (view === "settings") loadFeedKeys();
+  if (view === "settings") { loadFeedKeys(); loadBridge(); loadReplyTokens(); }
   if (chat) {
     delete state.unread[view];
     if (!state.rooms.has(view)) state.rooms.set(view, await api(`/api/messages?room=${encodeURIComponent(view)}`));
@@ -284,6 +284,120 @@ function initFeedKeys() {
   });
 }
 initFeedKeys();
+
+// ======================= Settings: bridge (real bots) + reply tokens =======================
+
+const BRIDGE_GROUPS = [
+  ["grok-1", "Lifteasy Door Services"],
+  ["grok-2", "garrett yeager"],
+];
+const escHtml = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+async function loadBridge() {
+  const msg = $("#bridge-msg");
+  msg.textContent = "";
+  try {
+    const { bots } = await api("/api/bridge");
+    $("#bridge-list").innerHTML = BRIDGE_GROUPS.map(([acct, title]) => `
+      <figure class="card">
+        <figcaption><span class="card-title">${escHtml(title)}</span></figcaption>
+        ${bots.filter((b) => b.account === acct).map((b) => `
+          <div class="bridge-row" data-bot="${escHtml(b.id)}" style="margin:10px 0">
+            <div><b>${escHtml(b.name)}</b> <code>${escHtml(b.id)}</code>
+              <span class="legend" data-role="status">key ${b.keySet ? "set" : "not set"}${b.keySet ? ` (${b.source === "volume" ? "saved" : "env"})` : ""}</span></div>
+            <input type="text" data-role="url" value="${escHtml(b.url)}" placeholder="https://api2.cursor.sh/automations/webhook/…" autocomplete="off" spellcheck="false" style="width:100%;font-family:monospace;margin:4px 0" />
+            <input type="password" data-role="key" value="" placeholder="leave blank to keep the current key" autocomplete="off" spellcheck="false" style="width:100%;font-family:monospace;margin:4px 0" />
+            <div style="display:flex;gap:8px">
+              <button type="button" class="ghost small" data-role="save">Save</button>
+              <button type="button" class="ghost small" data-role="clear">Clear</button>
+            </div>
+          </div>`).join("")}
+      </figure>`).join("");
+  } catch (e) {
+    msg.textContent = e.message;
+  }
+}
+async function refreshRealBadges() {
+  try {
+    state.config = await api("/api/config");
+    renderSidebar();
+  } catch {}
+}
+function initBridge() {
+  $("#bridge-list").addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("button[data-role]");
+    if (!btn) return;
+    const row = btn.closest(".bridge-row");
+    const id = row.dataset.bot;
+    const msg = $("#bridge-msg");
+    try {
+      if (btn.dataset.role === "save") {
+        const body = { url: row.querySelector('[data-role="url"]').value.trim() };
+        const key = row.querySelector('[data-role="key"]').value;
+        if (key) body.key = key;
+        await api(`/api/bridge/${encodeURIComponent(id)}`, { method: "PUT", body });
+        msg.textContent = `Saved ${id}.`;
+      } else {
+        if (!confirm(`Clear the saved webhook for ${id}? It falls back to the environment, or to a stand-in.`)) return;
+        await api(`/api/bridge/${encodeURIComponent(id)}`, { method: "DELETE" });
+        msg.textContent = `Cleared ${id}.`;
+      }
+      await loadBridge();
+      await refreshRealBadges();
+    } catch (e) { msg.textContent = `${id}: ${e.message}`; }
+  });
+}
+initBridge();
+
+function showReplyMeta(which, m) {
+  $(`#rt-${which}-meta`).textContent = m?.exists
+    ? which === "garrett" ? `created ${m.createdAt ? new Date(m.createdAt).toLocaleString() : "earlier"}` : "set"
+    : "not set";
+}
+async function loadReplyTokens() {
+  for (const w of ["lifteasy", "garrett"]) {
+    const t = $(`#rt-${w}-token`);
+    t.value = "";
+    t.hidden = true;
+    $(`#rt-${w}-msg`).textContent = "";
+  }
+  try {
+    const m = await api("/api/reply-tokens");
+    showReplyMeta("lifteasy", m.lifteasy);
+    showReplyMeta("garrett", m.garrett);
+  } catch (e) { $("#rt-garrett-msg").textContent = e.message; }
+}
+function initReplyTokens() {
+  for (const w of ["lifteasy", "garrett"]) {
+    const msg = (t) => ($(`#rt-${w}-msg`).textContent = t);
+    $(`#rt-${w}-reveal`).addEventListener("click", async () => {
+      try {
+        const r = await api(`/api/reply-tokens/${w}/reveal`, { method: "POST" });
+        $(`#rt-${w}-token`).value = r.token;
+        $(`#rt-${w}-token`).hidden = false;
+        msg("");
+      } catch (e) { msg(e.message); }
+    });
+    $(`#rt-${w}-copy`).addEventListener("click", async () => {
+      try {
+        const r = await api(`/api/reply-tokens/${w}/reveal`, { method: "POST" });
+        await navigator.clipboard.writeText(r.token);
+        msg("Copied to clipboard.");
+      } catch (e) { msg("Copy failed: " + e.message); }
+    });
+  }
+  $("#rt-garrett-regen").addEventListener("click", async () => {
+    if (!confirm("Regenerate the garrett reply token? The current token stops working immediately and Dummy must be updated.")) return;
+    try {
+      const r = await api("/api/reply-tokens/garrett/regenerate", { method: "POST" });
+      $("#rt-garrett-token").value = r.token;
+      $("#rt-garrett-token").hidden = false;
+      showReplyMeta("garrett", r);
+      $("#rt-garrett-msg").textContent = "New token issued. The previous token is revoked.";
+    } catch (e) { $("#rt-garrett-msg").textContent = e.message; }
+  });
+}
+initReplyTokens();
 
 // ======================= Status strip =======================
 

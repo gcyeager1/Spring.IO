@@ -16,6 +16,8 @@ import { estimateSend } from "./estimate.js";
 import { validateReport } from "../public/planusage.js";
 import { savePlanUsage, getPlanUsage } from "./planusage-store.js";
 import * as ra from "./realagent.js";
+import { bridgeView, saveWebhook, clearWebhook, isBridgeBot } from "./bridge-store.js";
+import { replyTokenMeta, revealGarrettReplyToken, revealLifteasyReplyToken, regenerateGarrettReplyToken, replyRole } from "./reply-tokens.js";
 
 const cfg = loadConfig();
 const PORT = Number(process.env.PORT ?? cfg.port ?? 3000);
@@ -336,9 +338,8 @@ const server = http.createServer(async (req, res) => {
     // already refused above.
     if (url.pathname === "/api/agent-reply" && req.method === "POST") {
       const m = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ""));
-      const expected = process.env.BOTHUB_REPLY_TOKEN;
-      const ok = timingSafeEqual(sha(m?.[1] ?? ""), sha(expected ?? "")) && Boolean(expected) && Boolean(m);
-      if (!ok) return json(res, 401, { error: "Unauthorized" });
+      const role = replyRole(m?.[1] ?? "", Boolean(m)); // "lifteasy" (env) | "garrett" | null
+      if (!role) return json(res, 401, { error: "Unauthorized" });
       let body;
       try { body = await readBody(req); } catch { return json(res, 400, { error: "Invalid JSON" }); }
       const hasText = typeof body?.text === "string" && body.text.trim();
@@ -347,6 +348,10 @@ const server = http.createServer(async (req, res) => {
         return json(res, 400, { error: "Need job_id, bot_id and text (or error)" });
       }
       const bot = botsById.get(body.bot_id);
+      // Each token only speaks for its own account's bots.
+      if (bot && bot.account !== (role === "garrett" ? "grok-2" : "grok-1")) {
+        return json(res, 403, { error: "Token not valid for this bot" });
+      }
       const found = bot ? ra.lookup(body.job_id, body.bot_id) : { state: "missing" };
       if (found.state === "missing") return json(res, 404, { error: "No open job for that job_id and bot_id" });
       if (found.state === "open") acceptReply(found.job, bot, body);
@@ -422,6 +427,47 @@ const server = http.createServer(async (req, res) => {
       console.log("garrett ingest token regenerated");
       res.setHeader("Cache-Control", "no-store");
       return json(res, 200, { token, ...garrettKeyMeta() });
+    }
+
+    // Bridge (real bots): webhook URL/key pairs on the volume. Keys are write-only.
+    if (url.pathname === "/api/bridge" && req.method === "GET") return json(res, 200, { bots: bridgeView() });
+    const bridgeM = /^\/api\/bridge\/([^/]+)$/.exec(url.pathname);
+    if (bridgeM && (req.method === "PUT" || req.method === "DELETE")) {
+      const id = decodeURIComponent(bridgeM[1]);
+      if (!isBridgeBot(id)) return json(res, 400, { error: "Unknown or non-Grok bot" });
+      let r;
+      if (req.method === "PUT") {
+        let body;
+        try { body = await readBody(req); } catch { return json(res, 400, { error: "Invalid JSON" }); }
+        r = saveWebhook(id, body?.url, typeof body?.key === "string" ? body.key : "");
+        if (!r.error) console.log(`bridge webhook saved for ${id}`);
+      } else {
+        r = clearWebhook(id);
+        if (!r.error) console.log(`bridge webhook cleared for ${id}`);
+      }
+      if (r.error) return json(res, 400, { error: r.error });
+      return json(res, 200, { bot: bridgeView().find((b) => b.id === id) });
+    }
+
+    // Reply tokens (session only; fetched on click, never in metadata, config or logs).
+    if (url.pathname === "/api/reply-tokens" && req.method === "GET") return json(res, 200, replyTokenMeta());
+    if (url.pathname === "/api/reply-tokens/lifteasy/reveal" && req.method === "POST") {
+      const token = revealLifteasyReplyToken();
+      if (!token) return json(res, 404, { error: "BOTHUB_REPLY_TOKEN is not set" });
+      console.log("lifteasy reply token revealed");
+      res.setHeader("Cache-Control", "no-store");
+      return json(res, 200, { token });
+    }
+    if (url.pathname === "/api/reply-tokens/garrett/reveal" && req.method === "POST") {
+      console.log("garrett reply token revealed");
+      res.setHeader("Cache-Control", "no-store");
+      return json(res, 200, { token: revealGarrettReplyToken(), ...replyTokenMeta().garrett });
+    }
+    if (url.pathname === "/api/reply-tokens/garrett/regenerate" && req.method === "POST") {
+      const token = regenerateGarrettReplyToken();
+      console.log("garrett reply token regenerated");
+      res.setHeader("Cache-Control", "no-store");
+      return json(res, 200, { token, ...replyTokenMeta().garrett });
     }
 
     if (req.method === "GET" && STATIC[url.pathname]) {
