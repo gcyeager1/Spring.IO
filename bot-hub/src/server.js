@@ -1,7 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import {
   ROOT, dataDir, loadConfig, publicConfig, isMock, isPlan, accountProblem, claudeCodeVersion,
 } from "./config.js";
@@ -12,6 +12,8 @@ import {
 } from "./auth.js";
 import { addMessage, getChat, clearChat, recordUsage, summarizeUsage, isDirect } from "./store.js";
 import { estimateSend } from "./estimate.js";
+import { validateReport } from "../public/planusage.js";
+import { savePlanUsage, getPlanUsage } from "./planusage-store.js";
 
 const cfg = loadConfig();
 const PORT = Number(process.env.PORT ?? cfg.port ?? 3000);
@@ -162,7 +164,18 @@ const STATIC = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/style.css": ["style.css", "text/css; charset=utf-8"],
+  "/planusage.js": ["planusage.js", "text/javascript; charset=utf-8"],
 };
+
+// Bearer token for the plan-usage ingest. Constant-time compare on equal-length digests;
+// an unset env var means every attempt fails.
+const sha = (v) => createHash("sha256").update(String(v)).digest();
+function ingestAuthorized(req) {
+  const expected = process.env.BOTHUB_INGEST_TOKEN;
+  const m = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ""));
+  const ok = timingSafeEqual(sha(m?.[1] ?? ""), sha(expected ?? ""));
+  return Boolean(expected) && Boolean(m) && ok;
+}
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
@@ -186,6 +199,22 @@ const server = http.createServer(async (req, res) => {
     }
 
     const authed = Boolean(verifySession(tokenOf(req)));
+
+    // Grok plan-usage ingest: bearer token instead of a session cookie.
+    if (url.pathname === "/api/plan-usage" && req.method === "POST") {
+      if (!ingestAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+      let body;
+      try { body = await readBody(req); } catch { return json(res, 400, { error: "Invalid JSON" }); }
+      const v = validateReport(body);
+      if (v.error) return json(res, 400, { error: v.error });
+      savePlanUsage(v.report);
+      broadcast("usage", {});
+      return json(res, 200, { ok: true });
+    }
+    if (url.pathname === "/api/plan-usage" && req.method === "GET") {
+      if (!authed && !ingestAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
+      return json(res, 200, getPlanUsage());
+    }
 
     if (url.pathname === "/login" && req.method === "GET") {
       if (authed) { res.writeHead(302, { Location: "/" }); return void res.end(); }
@@ -323,7 +352,10 @@ const server = http.createServer(async (req, res) => {
       const since = days === "all" ? 0 : Date.now() - (Number(days) || 7) * 86_400_000;
       const bot = url.searchParams.get("bot");
       const todayStart = Number(url.searchParams.get("todayStart")) || 0;
-      return json(res, 200, summarizeUsage(since, cfg.accounts, cfg.bots, bot && botsById.has(bot) ? bot : undefined, todayStart));
+      return json(res, 200, {
+        ...summarizeUsage(since, cfg.accounts, cfg.bots, bot && botsById.has(bot) ? bot : undefined, todayStart),
+        planUsage: getPlanUsage(),
+      });
     }
 
     json(res, 404, { error: "Not found" });

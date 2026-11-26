@@ -99,18 +99,18 @@ test("cross-origin writes are refused even with a session", async () => {
 
 test("mock chat: private room reply is recorded in usage", async () => {
   const h = { Cookie: cookie };
-  const post = await postJson(s.base + "/api/messages", { room: "dm:nova", text: "hello" }, h);
+  const post = await postJson(s.base + "/api/messages", { room: "dm:asschub", text: "hello" }, h);
   assert.equal(post.status, 202);
   let msgs;
   for (let i = 0; i < 50; i++) {
-    msgs = await (await fetch(s.base + "/api/messages?room=dm:nova", { headers: h })).json();
-    if (msgs.some((m) => m.speaker === "Nova")) break;
+    msgs = await (await fetch(s.base + "/api/messages?room=dm:asschub", { headers: h })).json();
+    if (msgs.some((m) => m.speaker === "Asschub")) break;
     await new Promise((r) => setTimeout(r, 100));
   }
   assert.ok(msgs.some((m) => m.speaker === "You"));
-  assert.ok(msgs.some((m) => m.speaker === "Nova"));
+  assert.ok(msgs.some((m) => m.speaker === "Asschub"));
   const usage = await (await fetch(s.base + "/api/usage?days=all", { headers: h })).json();
-  assert.ok(JSON.stringify(usage).includes("nova"));
+  assert.ok(JSON.stringify(usage).includes("asschub"));
   assert.ok(fs.existsSync(path.join(s.dataDir, "usage.jsonl")), "usage lives in DATA_DIR");
   assert.ok(fs.existsSync(path.join(s.dataDir, "chat.jsonl")));
   assert.equal((await postJson(s.base + "/api/messages", { room: "dm:nobody", text: "x" }, h)).status, 400);
