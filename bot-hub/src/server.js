@@ -446,6 +446,39 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true }); // already done: first write wins, no duplicate
     }
 
+    // Direct post: an allowed bot (agentPosters) speaks in a room without being woken first.
+    // Bearer only. Order: auth, body, bot/account/poster (403, same for unknown bots), room, text, cap.
+    if (url.pathname === "/api/agent-post" && req.method === "POST") {
+      const m = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ""));
+      const role = replyRole(m?.[1] ?? "", Boolean(m));
+      if (!role) return json(res, 401, { error: "Unauthorized" });
+      let body;
+      try { body = await readBody(req); } catch { return json(res, 400, { error: "Invalid JSON" }); }
+      if (typeof body?.bot_id !== "string" || typeof body?.room !== "string" || typeof body?.text !== "string") {
+        return json(res, 400, { error: "Need bot_id, room and text" });
+      }
+      const bot = botsById.get(body.bot_id);
+      if (!bot || !cfg.agentPosters.includes(bot.id) || bot.account !== (role === "garrett" ? "grok-2" : "grok-1")) {
+        return json(res, 403, { error: "Token not valid for posting as this bot" });
+      }
+      if (!validRoom(body.room)) return json(res, 400, { error: "Unknown room" });
+      if (!body.text.trim()) return json(res, 400, { error: "Need non-empty text" });
+      if (ra.agentPostsInWindow(bot.account) >= ra.AGENT_POST_CAP) {
+        return json(res, 429, { error: `Post limit reached (${ra.AGENT_POST_CAP} per hour)` });
+      }
+      ra.recordAgentPost(bot.account);
+      const msg = addMessage({
+        id: randomUUID(), ts: ra.nowMs(), room: body.room, speaker: bot.name,
+        botId: bot.id, account: bot.account, text: body.text.slice(0, 20000), error: false, realAgent: true,
+      });
+      broadcast("message", msg);
+      // New chain; the poster is spent in it (never woken back). Its @mentions are hop 1.
+      const chainId = ra.startChain(randomUUID());
+      ra.markChainWoken(chainId, bot.id);
+      handoff(body.room, bot, msg.text, chainId, 0);
+      return json(res, 200, { ok: true, id: msg.id });
+    }
+
     if (url.pathname === "/api/plan-usage" && req.method === "GET") {
       if (!authed && !ingestAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
       return json(res, 200, { ...getPlanUsage(), claude: getClaudeUsage() });
@@ -530,6 +563,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/bridge" && req.method === "GET") return json(res, 200, {
       bots: bridgeView(), handoffCap: ra.HANDOFF_CAP, handoffTriggers: cfg.handoffTriggers,
       handoffNames: cfg.handoffTriggers.map((id) => botsById.get(id)?.name ?? id),
+      agentPosters: cfg.agentPosters, agentPosterNames: cfg.agentPosters.map((id) => botsById.get(id)?.name ?? id),
     });
     const bridgeM = /^\/api\/bridge\/([^/]+)$/.exec(url.pathname);
     if (bridgeM && (req.method === "PUT" || req.method === "DELETE")) {
