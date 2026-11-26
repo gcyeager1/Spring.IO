@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node src/server.js",
     "mock": "BOT_HUB_MOCK=1 node src/server.js",
-    "test": "node --test test/pricing.test.js test/server.test.js test/planusage.test.js test/freebots.test.js test/ingestkeys.test.js test/realagent.test.js test/bridge.test.js test/teambrief.test.js test/claudeusage.test.js",
+    "test": "node --test test/pricing.test.js test/server.test.js test/planusage.test.js test/freebots.test.js test/ingestkeys.test.js test/realagent.test.js test/bridge.test.js test/teambrief.test.js test/handoff.test.js test/claudeusage.test.js",
     "hash-password": "node scripts/hash-password.js"
   },
   "engines": {

@@ -41,7 +41,7 @@ function broadcast(type, data) {
 const runs = new Map(); // room -> { stop: boolean }
 const runningRooms = () => [...runs.keys()];
 
-async function runConversation(room, participantIds, rounds) {
+async function runConversation(room, participantIds, rounds, chainId) {
   const participants = participantIds.map((id) => botsById.get(id));
   const names = ["You", ...participants.map((b) => b.name)];
   const run = { stop: false };
@@ -103,6 +103,8 @@ async function runConversation(room, participantIds, rounds) {
           note: result?.note,
         });
         broadcast("message", msg);
+        // The hub's own Claude bot may hand off too (hop 0 -> its @mentions are hop 1).
+        if (!error && chainId) handoff(room, bot, result.text, chainId, 0);
       }
     }
   } finally {
@@ -149,12 +151,48 @@ function expireJobs() {
 }
 
 /**
+ * Wake one real bot if the guards allow it (quiet hours, in-flight, hourly cap); otherwise post a
+ * short note. Returns true when a webhook was fired.
+ */
+function wakeOne(bot, room, text, { chainId, hop, speaker }) {
+  const hook = ra.webhookFor(bot.id);
+  if (!ra.withinHours()) {
+    addNote(room, `Real bots are offline until 7 AM Eastern (they only run 7 AM-9 PM). ${bot.name} was not woken.`);
+    return false;
+  }
+  if (ra.inFlight(bot.id, room)) {
+    addNote(room, `${bot.name} is still working on the previous request in this chat - wait for it before sending another.`);
+    return false;
+  }
+  if (ra.wakesInWindow(bot.account) >= ra.WAKE_CAP) {
+    addNote(room, `Wake limit reached for ${cfg.accountsById.get(bot.account)?.name ?? bot.account} (${ra.WAKE_CAP} per hour). ${bot.name} was not woken.`);
+    return false;
+  }
+  const job = ra.createJob({ id: randomUUID(), botId: bot.id, room, account: bot.account, chainId, hop, speaker });
+  ra.markChainWoken(chainId, bot.id);
+  const payload = ra.buildPayload(job, bot, text, getChat(room).filter((m) => !m.hidden));
+  scheduleJob(job);
+  broadcast("typing", { room, botId: bot.id, name: bot.name });
+  ra.postWebhook(hook, payload).then((r) => {
+    if (r.ok) return;
+    for (const x of timers.get(job.id) ?? []) clearTimeout(x);
+    timers.delete(job.id);
+    ra.updateJob(job.id, { status: "failed" });
+    addNote(room, `Couldn't reach ${bot.name} (${r.reason}). Not retrying - send the message again to try once more.`);
+    clearTyping(room);
+  });
+  return true;
+}
+
+/**
  * Decide which real agents a human message wakes, post notes for refusals, and fire webhooks.
  * Real agents never answer as stand-ins; only a human @mention (or their private room) wakes them.
+ * Every human message starts a new handoff chain (hop 0). Returns the chain id.
  */
 function wakeRealAgents(room, text) {
+  const chainId = ra.startChain(randomUUID());
   const real = cfg.bots.filter((b) => ra.isRealAgent(b));
-  if (!real.length) return;
+  if (!real.length) return chainId;
   let targets = [];
   if (isDirect(room)) {
     const b = botsById.get(room.slice(3));
@@ -169,33 +207,26 @@ function wakeRealAgents(room, text) {
       }
     }
   }
-  for (const bot of targets) {
-    const hook = ra.webhookFor(bot.id);
-    if (!ra.withinHours()) {
-      addNote(room, `Real bots are offline until 7 AM Eastern (they only run 7 AM-9 PM). ${bot.name} was not woken.`);
-      continue;
-    }
-    if (ra.inFlight(bot.id, room)) {
-      addNote(room, `${bot.name} is still working on the previous request in this chat - wait for it before sending another.`);
-      continue;
-    }
-    if (ra.wakesInWindow(bot.account) >= ra.WAKE_CAP) {
-      addNote(room, `Wake limit reached for ${cfg.accountsById.get(bot.account)?.name ?? bot.account} (${ra.WAKE_CAP} per hour). ${bot.name} was not woken.`);
-      continue;
-    }
-    const job = ra.createJob({ id: randomUUID(), botId: bot.id, room, account: bot.account });
-    const payload = ra.buildPayload(job, bot, text, getChat(room).filter((m) => !m.hidden));
-    scheduleJob(job);
-    broadcast("typing", { room, botId: bot.id, name: bot.name });
-    ra.postWebhook(hook, payload).then((r) => {
-      if (r.ok) return;
-      for (const x of timers.get(job.id) ?? []) clearTimeout(x);
-      timers.delete(job.id);
-      ra.updateJob(job.id, { status: "failed" });
-      addNote(room, `Couldn't reach ${bot.name} (${r.reason}). Not retrying - send the message again to try once more.`);
-      clearTyping(room);
-    });
+  for (const bot of targets) wakeOne(bot, room, text, { chainId, hop: 0, speaker: "You" });
+  return chainId;
+}
+
+/**
+ * Bot-to-bot handoff: @mentions in a reply from an allowed bot wake the mentioned real bots in the
+ * same chain at hop + 1. Replies from bots not on the allowed list are ignored, silently.
+ * Guards: never itself, each bot at most once per chain, at most HANDOFF_CAP hops.
+ */
+function handoff(room, fromBot, text, chainId, fromHop) {
+  if (!cfg.handoffTriggers.includes(fromBot.id) || typeof text !== "string") return;
+  const m = ra.parseMentions(text, cfg.bots);
+  const targets = cfg.bots.filter((b) => m.ids.has(b.id) && b.id !== fromBot.id && ra.isRealAgent(b) && !ra.chainWoken(chainId, b.id));
+  if (!targets.length) return;
+  const hop = fromHop + 1;
+  if (hop > ra.HANDOFF_CAP) {
+    if (ra.claimCapNote(chainId)) addNote(room, `Handoff limit reached (${ra.HANDOFF_CAP}). Bots are waiting for Garrett.`);
+    return;
   }
+  for (const bot of targets) wakeOne(bot, room, text, { chainId, hop, speaker: fromBot.name });
 }
 
 function acceptReply(job, bot, body) {
@@ -220,6 +251,7 @@ function acceptReply(job, bot, body) {
   });
   broadcast("message", msg);
   clearTyping(job.room);
+  if (!error) handoff(job.room, bot, text, job.chainId ?? job.id, job.hop ?? 0);
 }
 
 // ---------- HTTP ----------
@@ -495,7 +527,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Bridge (real bots): webhook URL/key pairs on the volume. Keys are write-only.
-    if (url.pathname === "/api/bridge" && req.method === "GET") return json(res, 200, { bots: bridgeView() });
+    if (url.pathname === "/api/bridge" && req.method === "GET") return json(res, 200, {
+      bots: bridgeView(), handoffCap: ra.HANDOFF_CAP, handoffTriggers: cfg.handoffTriggers,
+      handoffNames: cfg.handoffTriggers.map((id) => botsById.get(id)?.name ?? id),
+    });
     const bridgeM = /^\/api\/bridge\/([^/]+)$/.exec(url.pathname);
     if (bridgeM && (req.method === "PUT" || req.method === "DELETE")) {
       const id = decodeURIComponent(bridgeM[1]);
@@ -614,8 +649,8 @@ const server = http.createServer(async (req, res) => {
         } else if (!getChat(room).some((m) => !m.hidden)) {
           return json(res, 400, { error: "Say something to start the conversation" });
         }
-        if (standIns.length) runConversation(room, standIns, rounds).catch((e) => console.error(e));
-        wakeRealAgents(room, text);
+        const chainId = wakeRealAgents(room, text);
+        if (standIns.length) runConversation(room, standIns, rounds, chainId).catch((e) => console.error(e));
         return json(res, 202, { ok: true });
       }
     }
