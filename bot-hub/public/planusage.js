@@ -105,10 +105,10 @@ export function poolSlices(report) {
 }
 
 const PIE_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)", "var(--series-7)", "var(--series-8)"];
-export const sliceColor = (s, i) => (s.remaining ? "var(--surface-3)" : s.leftover ? "var(--series-other)" : PIE_COLORS[i % PIE_COLORS.length]);
+export const sliceColor = (s, i) => (s.color ? s.color : s.remaining ? "var(--surface-3)" : s.leftover ? "var(--series-other)" : PIE_COLORS[i % PIE_COLORS.length]);
 
 /** SVG donut markup (no dependencies). Zero-size slices are skipped; pure so tests can inspect it. */
-export function pieSvg(slices, size = 120) {
+export function pieSvg(slices, size = 120, label = "Weekly pool") {
   const c = size / 2, r = size / 2 - 2, ri = r * 0.58;
   const pt = (rad, a) => `${(c + rad * Math.sin(a)).toFixed(3)},${(c - rad * Math.cos(a)).toFixed(3)}`;
   const total = slices.reduce((a, s) => a + s.pct, 0) || 100;
@@ -122,5 +122,74 @@ export function pieSvg(slices, size = 120) {
     paths.push(`<path d="M${pt(r, a0)}A${r},${r} 0 ${big} 1 ${pt(r, a1)}L${pt(ri, a1)}A${ri},${ri} 0 ${big} 0 ${pt(ri, a0)}Z" fill="${sliceColor(s, i)}"><title>${s.name.replace(/[<>&"]/g, "")} ${fmtPoolShare(s.pct)}</title></path>`);
     a0 = a1;
   });
-  return `<svg class="pie" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="Weekly pool">${paths.join("")}</svg>`;
+  return `<svg class="pie" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="${label}">${paths.join("")}</svg>`;
+}
+
+// ---------- Claude plan usage (5-hour / weekly / Opus weekly windows) ----------
+
+export const CLAUDE_WINDOW_LABELS = { five_hour: "5-hour", seven_day: "Weekly", seven_day_opus: "Opus weekly", seven_day_sonnet: "Sonnet weekly" };
+export const CLAUDE_FEED_KEYS = ["five_hour", "seven_day", "seven_day_opus"];
+
+/** Validate a POST /api/plan-usage body with account:"claude". Returns { windows, reportedAt } or { error }. */
+export function validateClaudeFeed(b) {
+  if (!b || typeof b !== "object" || Array.isArray(b)) return { error: "Invalid report" };
+  if (b.account !== "claude") return { error: "account must be claude" };
+  const w = b.windows;
+  if (!w || typeof w !== "object" || Array.isArray(w)) return { error: "windows must be an object" };
+  const windows = {};
+  for (const key of CLAUDE_FEED_KEYS) {
+    if (w[key] == null) continue;
+    const { usedPct, resetsAt } = w[key];
+    if (typeof usedPct !== "number" || !Number.isFinite(usedPct) || usedPct < 0) return { error: `${key}.usedPct must be a non-negative number` };
+    let d;
+    if (typeof resetsAt === "number" && Number.isFinite(resetsAt)) d = new Date(resetsAt * 1000);
+    else if (typeof resetsAt === "string" && resetsAt.trim()) d = new Date(resetsAt);
+    if (!d || Number.isNaN(d.getTime())) return { error: `${key}.resetsAt must be an ISO date or unix seconds` };
+    windows[key] = { usedPct: Math.round(usedPct * 10) / 10, resetsAt: d.toISOString(), status: "allowed" };
+  }
+  if (!Object.keys(windows).length) return { error: "windows needs five_hour, seven_day or seven_day_opus" };
+  let reportedAt;
+  if (b.reportedAt != null) {
+    if (typeof b.reportedAt !== "string" || Number.isNaN(new Date(b.reportedAt).getTime())) return { error: "reportedAt must be an ISO date" };
+    reportedAt = b.reportedAt;
+  }
+  return { windows, reportedAt };
+}
+
+/** Ordered windows present in a Claude usage report: [{ key, label, usedPct, resetsAt, status, reset }]. */
+export function claudeWindows(report) {
+  const w = report?.windows;
+  if (!w || typeof w !== "object") return [];
+  return Object.keys(CLAUDE_WINDOW_LABELS)
+    .filter((k) => w[k] && Number.isFinite(Number(w[k].usedPct)))
+    .map((k) => ({
+      key: k,
+      label: CLAUDE_WINDOW_LABELS[k],
+      usedPct: Number(w[k].usedPct),
+      resetsAt: w[k].resetsAt,
+      status: w[k].status ?? "allowed",
+      reset: Boolean(w[k].reset),
+    }));
+}
+
+/** "in 2h 14m" / "in 3d 4h" / "in 5m"; "now" when past; "unknown" for bad input. */
+export function fmtResetIn(iso, now = Date.now()) {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "unknown";
+  const m = Math.floor((t - now) / 60000);
+  if (m <= 0) return "now";
+  if (m < 60) return `in ${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `in ${h}h ${m % 60}m`;
+  return `in ${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+/** Two slices for one Claude window donut: used + Remaining. */
+export function claudeSlices(w) {
+  const used = Math.min(Math.max(Number(w.usedPct) || 0, 0), 100);
+  const warn = w.status !== "allowed" || used >= 80;
+  return [
+    { name: "Used", pct: used, leftover: false, remaining: false, color: warn ? "var(--warn)" : "var(--series-1)" },
+    { name: "Remaining", pct: 100 - used, leftover: false, remaining: true },
+  ];
 }

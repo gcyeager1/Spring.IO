@@ -2,7 +2,7 @@
 // status strip and a usage dashboard with per-bot breakdowns.
 // No build step, no dependencies. Charts are hand-built SVG.
 
-import { fmtShare, fmtPercentUsed, fmtResetEastern, fmtAgo as fmtReportAgo, isLeftoverBucket, reportFor, poolSlices, pieSvg, sliceColor, fmtPoolShare, EMPTY_PLAN_TEXT } from "/planusage.js";
+import { fmtShare, fmtPercentUsed, fmtResetEastern, fmtAgo as fmtReportAgo, isLeftoverBucket, reportFor, poolSlices, pieSvg, sliceColor, fmtPoolShare, EMPTY_PLAN_TEXT, claudeWindows, claudeSlices, fmtResetIn } from "/planusage.js";
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) =>
@@ -1048,8 +1048,30 @@ function renderPlanUsage(u) {
       </figure>`;
     })
     .join("");
-  $("#plan-usage").innerHTML = html;
+  $("#plan-usage").innerHTML = html + claudeCard(u.planUsage?.claude);
 }
+
+function claudeCard(r) {
+  const wins = claudeWindows(r);
+  const head = `<figcaption><span class="card-title">Claude</span><button type="button" class="claude-refresh" title="Refresh Claude usage" aria-label="Refresh Claude usage">↻</button></figcaption>`;
+  if (!wins.length) return `<figure class="card plan-card claude-card">${head}<p class="muted">${EMPTY_PLAN_TEXT}</p></figure>`;
+  const dials = wins
+    .map((w) => {
+      const when = w.reset ? "Reset" : `Resets ${esc(fmtResetEastern(w.resetsAt))}`;
+      const inn = w.key === "five_hour" && !w.reset ? `<div class="muted small">${esc(fmtResetIn(w.resetsAt))}</div>` : "";
+      return `<div class="claude-win"><div class="claude-pie">${pieSvg(claudeSlices(w), 84, `${w.label} used`)}<span class="claude-pct">${esc(fmtPercentUsed(w.usedPct))}</span></div><div class="claude-label">${esc(w.label)}</div><div class="muted small">${when}</div>${inn}</div>`;
+    })
+    .join("");
+  return `<figure class="card plan-card claude-card">${head}<div class="claude-wins">${dials}</div><div class="muted small">Updated ${esc(fmtReportAgo(r.updatedAt))}</div></figure>`;
+}
+
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest?.(".claude-refresh");
+  if (!b || b.disabled) return;
+  b.disabled = true;
+  try { await fetch("/api/claude-usage/refresh", { method: "POST" }); } catch {}
+  b.disabled = false;
+});
 
 function renderAccounts(u) {
   const rows = state.config.accounts
