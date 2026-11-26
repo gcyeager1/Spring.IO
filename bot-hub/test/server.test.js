@@ -74,6 +74,8 @@ test("session cookie unlocks the API, UI and SSE", async () => {
   const cfg = await (await fetch(s.base + "/api/config", { headers: h })).json();
   assert.equal(cfg.mock, true);
   assert.ok(!JSON.stringify(cfg).includes("API_KEY"), "public config must not name key env vars");
+  assert.ok(!/WEBHOOK|REPLY_TOKEN/.test(JSON.stringify(cfg)), "public config must not name webhook/reply env vars");
+  assert.ok(cfg.bots.every((b) => !b.realAgent), "no webhook env set -> every bot is a stand-in");
   assert.equal((await fetch(s.base + "/", { headers: h })).status, 200);
   assert.equal((await fetch(s.base + "/login", { headers: h, redirect: "manual" })).status, 302);
 

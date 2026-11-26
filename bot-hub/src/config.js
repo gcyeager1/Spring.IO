@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRealAgent } from "./realagent.js";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -62,7 +63,8 @@ export function publicConfig(cfg) {
       plan: isPlan(a),
       problem: accountProblem(a),
     })),
-    bots: cfg.bots.map((b) => ({ id: b.id, name: b.name, account: b.account, model: b.model })),
+    // realAgent is only a boolean: the webhook URL/key themselves never leave the server.
+    bots: cfg.bots.map((b) => ({ id: b.id, name: b.name, account: b.account, model: b.model, realAgent: isRealAgent(b) })),
   };
 }
 

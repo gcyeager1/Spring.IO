@@ -15,6 +15,7 @@ import { addMessage, getChat, clearChat, recordUsage, summarizeUsage, isDirect }
 import { estimateSend } from "./estimate.js";
 import { validateReport } from "../public/planusage.js";
 import { savePlanUsage, getPlanUsage } from "./planusage-store.js";
+import * as ra from "./realagent.js";
 
 const cfg = loadConfig();
 const PORT = Number(process.env.PORT ?? cfg.port ?? 3000);
@@ -104,6 +105,117 @@ async function runConversation(room, participantIds, rounds) {
     runs.delete(room);
     broadcast("status", { running: runningRooms(), done: room, actual });
   }
+}
+
+
+// ---------- Real agents (webhook bridge) ----------
+// A visible note in the room. Hidden so stand-in bots never see it as something to answer.
+function addNote(room, text) {
+  const msg = addMessage({ id: randomUUID(), ts: ra.nowMs(), room, speaker: "System", botId: null, hidden: true, system: true, text });
+  broadcast("message", msg);
+}
+
+const timers = new Map(); // job id -> timers
+function clearTyping(room) {
+  broadcast("status", { running: runningRooms(), done: room });
+}
+function scheduleJob(job) {
+  const age = ra.nowMs() - job.ts;
+  const t = [];
+  if (!job.timeoutNoted) {
+    t.push(setTimeout(() => {
+      const j = ra.getJob(job.id);
+      if (!j || j.status !== "open" || j.timeoutNoted) return;
+      ra.updateJob(job.id, { timeoutNoted: true });
+      const name = botsById.get(j.botId)?.name ?? j.botId;
+      addNote(j.room, `Still waiting on ${name} - it's taking longer than expected. A late reply will still show up here.`);
+    }, Math.max(0, ra.TIMEOUT_NOTE_MS - age)));
+  }
+  t.push(setTimeout(() => expireJobs(), Math.max(0, ra.EXPIRE_MS - age) + 50));
+  for (const x of t) x.unref?.();
+  timers.set(job.id, t);
+}
+function expireJobs() {
+  for (const j of ra.expireStale()) {
+    for (const x of timers.get(j.id) ?? []) clearTimeout(x);
+    timers.delete(j.id);
+    addNote(j.room, `No reply from ${botsById.get(j.botId)?.name ?? j.botId} after 30 minutes - giving up on that request.`);
+    clearTyping(j.room);
+  }
+}
+
+/**
+ * Decide which real agents a human message wakes, post notes for refusals, and fire webhooks.
+ * Real agents never answer as stand-ins; only a human @mention (or their private room) wakes them.
+ */
+function wakeRealAgents(room, text) {
+  const real = cfg.bots.filter((b) => ra.isRealAgent(b));
+  if (!real.length) return;
+  let targets = [];
+  if (isDirect(room)) {
+    const b = botsById.get(room.slice(3));
+    if (b && ra.isRealAgent(b) && text) targets = [b];
+  } else if (text) {
+    const m = ra.parseMentions(text, cfg.bots);
+    targets = real.filter((b) => m.ids.has(b.id));
+    for (const amb of m.ambiguous) {
+      if (amb.ids.some((id) => botsById.has(id) && ra.isRealAgent(botsById.get(id)))) {
+        const opts = amb.ids.map((id) => `@${id}`).join(" or ");
+        addNote(room, `"@${amb.name}" matches more than one bot - nobody was woken. Use ${opts}.`);
+      }
+    }
+  }
+  for (const bot of targets) {
+    const hook = ra.webhookFor(bot.id);
+    if (!ra.withinHours()) {
+      addNote(room, `Real bots are offline until 7 AM Eastern (they only run 7 AM-9 PM). ${bot.name} was not woken.`);
+      continue;
+    }
+    if (ra.inFlight(bot.id, room)) {
+      addNote(room, `${bot.name} is still working on the previous request in this chat - wait for it before sending another.`);
+      continue;
+    }
+    if (ra.wakesInWindow(bot.account) >= ra.WAKE_CAP) {
+      addNote(room, `Wake limit reached for ${cfg.accountsById.get(bot.account)?.name ?? bot.account} (${ra.WAKE_CAP} per hour). ${bot.name} was not woken.`);
+      continue;
+    }
+    const job = ra.createJob({ id: randomUUID(), botId: bot.id, room, account: bot.account });
+    const payload = ra.buildPayload(job, bot, text, getChat(room).filter((m) => !m.hidden));
+    scheduleJob(job);
+    broadcast("typing", { room, botId: bot.id, name: bot.name });
+    ra.postWebhook(hook, payload).then((r) => {
+      if (r.ok) return;
+      for (const x of timers.get(job.id) ?? []) clearTimeout(x);
+      timers.delete(job.id);
+      ra.updateJob(job.id, { status: "failed" });
+      addNote(room, `Couldn't reach ${bot.name} (${r.reason}). Not retrying - send the message again to try once more.`);
+      clearTyping(room);
+    });
+  }
+}
+
+function acceptReply(job, bot, body) {
+  const account = cfg.accountsById.get(bot.account);
+  const error = typeof body.text === "string" && body.text.trim() ? undefined : String(body.error).slice(0, 1000);
+  const text = error ? undefined : body.text.slice(0, 20000);
+  ra.updateJob(job.id, { status: "done", doneAt: ra.nowMs() });
+  for (const x of timers.get(job.id) ?? []) clearTimeout(x);
+  timers.delete(job.id);
+  // A plan run: no dollar cost and no invented token counts.
+  recordUsage({
+    ts: ra.nowMs(), room: job.room, account: account.id, bot: bot.id, model: bot.model,
+    input: 0, cachedInput: 0, cacheWrite: 0, output: 0, cost: 0,
+    plan: error ? undefined : true, apiValue: error ? undefined : 0,
+    latencyMs: ra.nowMs() - job.ts, ok: !error, error, realAgent: true, mock: isMock() || undefined,
+  });
+  broadcast("usage", {});
+  const msg = addMessage({
+    id: randomUUID(), ts: ra.nowMs(), room: job.room, speaker: bot.name,
+    botId: error ? null : bot.id, hidden: error ? true : undefined, account: account.id,
+    text: error ? `Error: ${error}` : text, error: Boolean(error), realAgent: true,
+  });
+  broadcast("message", msg);
+  clearTyping(job.room);
 }
 
 // ---------- HTTP ----------
@@ -219,6 +331,28 @@ const server = http.createServer(async (req, res) => {
       broadcast("usage", {});
       return json(res, 200, { ok: true });
     }
+    // Real-agent callback: bearer token (BOTHUB_REPLY_TOKEN) instead of a session cookie.
+    // Server-to-server, so no Origin header is expected; browsers sending a foreign Origin were
+    // already refused above.
+    if (url.pathname === "/api/agent-reply" && req.method === "POST") {
+      const m = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ""));
+      const expected = process.env.BOTHUB_REPLY_TOKEN;
+      const ok = timingSafeEqual(sha(m?.[1] ?? ""), sha(expected ?? "")) && Boolean(expected) && Boolean(m);
+      if (!ok) return json(res, 401, { error: "Unauthorized" });
+      let body;
+      try { body = await readBody(req); } catch { return json(res, 400, { error: "Invalid JSON" }); }
+      const hasText = typeof body?.text === "string" && body.text.trim();
+      const hasError = typeof body?.error === "string" && body.error.trim();
+      if (typeof body?.job_id !== "string" || typeof body?.bot_id !== "string" || (!hasText && !hasError)) {
+        return json(res, 400, { error: "Need job_id, bot_id and text (or error)" });
+      }
+      const bot = botsById.get(body.bot_id);
+      const found = bot ? ra.lookup(body.job_id, body.bot_id) : { state: "missing" };
+      if (found.state === "missing") return json(res, 404, { error: "No open job for that job_id and bot_id" });
+      if (found.state === "open") acceptReply(found.job, bot, body);
+      return json(res, 200, { ok: true }); // already done: first write wins, no duplicate
+    }
+
     if (url.pathname === "/api/plan-usage" && req.method === "GET") {
       if (!authed && !ingestAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
       return json(res, 200, getPlanUsage());
@@ -347,12 +481,16 @@ const server = http.createServer(async (req, res) => {
           rounds = Math.min(Math.max(Number(body.rounds) || 1, 1), 10);
           if (!participants.length) return json(res, 400, { error: "Pick at least one bot for the group" });
         }
+        // Real agents never reply as stand-ins: they are woken by webhook or not at all.
+        const standIns = participants.filter((id) => !ra.isRealAgent(botsById.get(id)));
+        if (isDirect(room) && !standIns.length && !text) return json(res, 400, { error: "Say something to message a real bot" });
         if (text) {
-          broadcast("message", addMessage({ id: randomUUID(), ts: Date.now(), room, speaker: "You", botId: null, text }));
+          broadcast("message", addMessage({ id: randomUUID(), ts: ra.nowMs(), room, speaker: "You", botId: null, text }));
         } else if (!getChat(room).some((m) => !m.hidden)) {
           return json(res, 400, { error: "Say something to start the conversation" });
         }
-        runConversation(room, participants, rounds).catch((e) => console.error(e));
+        if (standIns.length) runConversation(room, standIns, rounds).catch((e) => console.error(e));
+        wakeRealAgents(room, text);
         return json(res, 202, { ok: true });
       }
     }
@@ -388,6 +526,10 @@ const server = http.createServer(async (req, res) => {
     json(res, 500, { error: err?.message ?? "Server error" });
   }
 });
+
+// Resume timers for jobs that were open when the process last stopped.
+expireJobs();
+for (const j of ra.openJobs()) scheduleJob(j);
 
 server.listen(PORT, HOST, () => {
   const shown = HOST === "0.0.0.0" ? "localhost" : HOST;
