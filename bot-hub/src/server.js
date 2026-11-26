@@ -13,8 +13,9 @@ import {
 } from "./auth.js";
 import { addMessage, getChat, clearChat, recordUsage, summarizeUsage, isDirect } from "./store.js";
 import { estimateSend } from "./estimate.js";
-import { validateReport } from "../public/planusage.js";
+import { validateReport, validateClaudeFeed } from "../public/planusage.js";
 import { savePlanUsage, getPlanUsage } from "./planusage-store.js";
+import { getClaudeUsage, recordClaudeUsage, refreshClaudeUsageNow, startClaudeUsageProbe, claudeUsageLastRunAt, claudeUsageRunning } from "./claude-usage.js";
 import * as ra from "./realagent.js";
 import { ensureTeamBrief, readTeamBrief, saveTeamBrief } from "./team-brief.js";
 import { bridgeView, saveWebhook, clearWebhook, isBridgeBot, BRIDGE_BOTS, validateWebhookUrl } from "./bridge-store.js";
@@ -340,6 +341,14 @@ const server = http.createServer(async (req, res) => {
       if (!role) return json(res, 401, { error: "Unauthorized" });
       let body;
       try { body = await readBody(req); } catch { return json(res, 400, { error: "Invalid JSON" }); }
+      if (body?.account === "claude") {
+        if (role === "garrett") return json(res, 403, { error: "Key not valid for this account" });
+        const c = validateClaudeFeed(body);
+        if (c.error) return json(res, 400, { error: c.error });
+        recordClaudeUsage(c.windows, "feed");
+        broadcast("usage", {});
+        return json(res, 200, { ok: true });
+      }
       if (role === "garrett" && body?.account !== "garrett") return json(res, 403, { error: "Key not valid for this account" });
       const v = validateReport(body);
       if (v.error) return json(res, 400, { error: v.error });
@@ -407,7 +416,16 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/plan-usage" && req.method === "GET") {
       if (!authed && !ingestAuthorized(req)) return json(res, 401, { error: "Unauthorized" });
-      return json(res, 200, getPlanUsage());
+      return json(res, 200, { ...getPlanUsage(), claude: getClaudeUsage() });
+    }
+
+    if (url.pathname === "/api/claude-usage/refresh" && req.method === "POST") {
+      if (!authed) return json(res, 401, { error: "Unauthorized" });
+      if (claudeUsageRunning()) return json(res, 409, { error: "Already refreshing" });
+      if (Date.now() - claudeUsageLastRunAt() < 60_000) return json(res, 429, { error: "Refreshed less than a minute ago" });
+      const r = await refreshClaudeUsageNow();
+      if (r.ok) broadcast("usage", {});
+      return json(res, 200, { ok: r.ok, claude: getClaudeUsage() });
     }
 
     if (url.pathname === "/login" && req.method === "GET") {
@@ -623,7 +641,7 @@ const server = http.createServer(async (req, res) => {
       const todayStart = Number(url.searchParams.get("todayStart")) || 0;
       return json(res, 200, {
         ...summarizeUsage(since, cfg.accounts, cfg.bots, bot && botsById.has(bot) ? bot : undefined, todayStart),
-        planUsage: getPlanUsage(),
+        planUsage: { ...getPlanUsage(), claude: getClaudeUsage() },
       });
     }
 
@@ -639,6 +657,8 @@ ensureTeamBrief();
 // Resume timers for jobs that were open when the process last stopped.
 expireJobs();
 for (const j of ra.openJobs()) scheduleJob(j);
+
+startClaudeUsageProbe({ account: cfg.accounts.find((a) => a.provider === "claude-code"), mock: isMock() });
 
 server.listen(PORT, HOST, () => {
   const shown = HOST === "0.0.0.0" ? "localhost" : HOST;

@@ -1,9 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { spawn } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { isMock, isPlan } from "./config.js";
+import { CC_CWD, extractFromStreamJson, recordClaudeUsage } from "./claude-usage.js";
 
 /**
  * Every provider gets the same input: the bot, its account, and the shared
@@ -149,10 +147,6 @@ async function callAnthropic(bot, account, transcript, ctx) {
 // Personal use only: Anthropic doesn't allow subscription logins to serve
 // other people - use the "anthropic" provider with an API key for that.
 
-// An empty working folder, so Claude Code doesn't pick up this project's files or settings.
-const CC_CWD = path.join(os.tmpdir(), "bot-hub-claude-code");
-fs.mkdirSync(CC_CWD, { recursive: true });
-
 function transcriptText(bot, transcript, direct) {
   const lines = transcript
     .filter((m) => !m.hidden)
@@ -165,7 +159,7 @@ async function callClaudeCode(bot, account, transcript, ctx) {
   const args = [
     "-p",
     `The conversation so far is above. Write ${bot.name}'s next message only - no name prefix.`,
-    "--output-format", "json",
+    "--output-format", "stream-json", "--verbose",
     "--system-prompt", ctx.system,
     "--tools", "", // chat only: no file, shell or web tools
     "--max-turns", "1",
@@ -204,10 +198,9 @@ async function callClaudeCode(bot, account, transcript, ctx) {
     child.stdin.end(transcriptText(bot, transcript, ctx.direct));
   });
 
-  let data;
-  try {
-    data = JSON.parse(out.stdout);
-  } catch {
+  const { result: data, windows } = extractFromStreamJson(out.stdout);
+  if (windows) recordClaudeUsage(windows, "hub");
+  if (!data) {
     const detail = (out.stderr || out.stdout).trim().split("\n").slice(-1)[0] || `exit code ${out.code}`;
     throw new Error(`Claude Code: ${detail}`);
   }

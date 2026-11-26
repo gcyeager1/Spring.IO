@@ -57,6 +57,26 @@ The Docker image installs the Claude Code CLI (`npm install -g @anthropic-ai/cla
 
 Running it on a server just for yourself: Claude Code there can't open a browser to sign in. Run `claude setup-token` on your own computer, then set the printed token as the `CLAUDE_CODE_OAUTH_TOKEN` secret on the server. Treat it like a password. Bot Hub removes any `ANTHROPIC_API_KEY` from Claude Code's environment, because an API key would take priority over your subscription.
 
+## Claude plan usage
+
+The usage panel has a **Claude** card with your plan's 5-hour, weekly and (when present) Opus weekly usage. It is read only from the `rate_limit_event` messages the Claude Code CLI prints (`--output-format stream-json --verbose`); Bot Hub never calls an Anthropic HTTP endpoint for this.
+
+- Every Claude reply through Claude Code refreshes the card for free.
+- A server-side probe also runs a tiny Haiku call (`Reply with just: ok`, no tools) every `CLAUDE_USAGE_PROBE_MINUTES` minutes (default 60, `0` disables), only between 7:00 and 20:59 Eastern, and skipped if usage was updated more recently than that. It runs once ~20s after startup too. It is off in mock mode or when no Claude Code account is configured.
+- A window whose reset time has passed shows 0% until new data arrives.
+
+Optional feed from elsewhere: `POST /api/plan-usage` with the ingest bearer token and
+
+```json
+{ "account": "claude",
+  "windows": { "five_hour": { "usedPct": 12.5, "resetsAt": "2026-12-01T18:00:00Z" },
+               "seven_day": { "usedPct": 3, "resetsAt": 1796043600 },
+               "seven_day_opus": { "usedPct": 0, "resetsAt": 1796043600 } },
+  "reportedAt": "2026-12-01T14:00:00Z" }
+```
+
+`usedPct` is 0-100; `resetsAt` is an ISO date or unix seconds. `POST /api/claude-usage/refresh` (signed-in session) forces a probe now.
+
 ## Environment variables
 
 | Variable | Purpose |

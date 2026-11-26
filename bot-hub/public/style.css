@@ -314,3 +314,13 @@ td.err { color: var(--bad); }
   .chat-stats, .side-hint { display: none; }
 }
 @media (max-width: 420px) { .plan-body { flex-direction: column; align-items: stretch; } .plan-body .pie { align-self: center; } }
+
+.claude-card figcaption { display: flex; justify-content: space-between; align-items: center; }
+.claude-refresh { background: none; border: 0; color: var(--text-3); cursor: pointer; font-size: 15px; padding: 0 4px; }
+.claude-refresh:hover { color: var(--text); }
+.claude-wins { display: flex; flex-wrap: wrap; gap: 14px; justify-content: space-around; }
+.claude-win { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; min-width: 92px; }
+.claude-pie { position: relative; width: 84px; height: 84px; }
+.claude-pie .pie { width: 84px; height: 84px; }
+.claude-pct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 600; }
+.claude-label { font-size: 13px; font-weight: 500; }
