@@ -269,14 +269,21 @@ export async function callBot(bot, account, transcript, participants, { direct =
   }
 }
 
-/** Rough API list-price value of a call, from the account's configured prices. */
+/**
+ * Estimated API list-price USD of one request. If pricing.longContext is set and
+ * the request's prompt (input + cached input) reaches its thresholdTokens, every
+ * token in the request is billed at the long-context rates (xAI behaviour).
+ */
 export function listPrice(usage, pricing = {}) {
-  const per = (n, p) => ((n ?? 0) * (p ?? 0)) / 1e6;
+  const lc = pricing.longContext;
+  const prompt = (usage.input ?? 0) + (usage.cachedInput ?? 0);
+  const p = lc && prompt >= (lc.thresholdTokens ?? 200_000) ? { ...pricing, ...lc } : pricing;
+  const per = (n, rate) => ((n ?? 0) * (rate ?? 0)) / 1e6;
   return (
-    per(usage.input, pricing.inputPerM) +
-    per(usage.output, pricing.outputPerM) +
-    per(usage.cachedInput, pricing.cachedInputPerM ?? pricing.inputPerM) +
-    per(usage.cacheWrite, pricing.cacheWritePerM ?? pricing.inputPerM)
+    per(usage.input, p.inputPerM) +
+    per(usage.output, p.outputPerM) +
+    per(usage.cachedInput, p.cachedInputPerM ?? p.inputPerM) +
+    per(usage.cacheWrite, p.cacheWritePerM ?? p.inputPerM)
   );
 }
 

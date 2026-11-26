@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+/** Persistent data (chat/usage JSONL, setup-created admin). Mount a volume here when hosted. */
+export const dataDir = () => path.resolve(process.env.DATA_DIR || path.join(ROOT, "data"));
 
 export function loadConfig() {
   const own = path.join(ROOT, "config.json");
@@ -31,11 +35,18 @@ export function claudeCodeVersion(command = "claude") {
   return cliChecks.get(command);
 }
 
+const hasLocalLogin = () => fs.existsSync(path.join(os.homedir(), ".claude", ".credentials.json"));
+
 /** Why an account can't make calls right now, or null if it looks ready. */
 export function accountProblem(account) {
   if (isMock()) return null;
   if (account.provider === "claude-code") {
-    return claudeCodeVersion(account.command) ? null : "Claude Code not found - install it and log in";
+    if (!claudeCodeVersion(account.command)) return "Claude Code not found - install it and log in";
+    // Hosted/headless: there's no browser to /login, so the setup-token env var is required.
+    if (!process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.stdin.isTTY && !hasLocalLogin()) {
+      return "CLAUDE_CODE_OAUTH_TOKEN not set (run `claude setup-token`)";
+    }
+    return null;
   }
   return process.env[account.apiKeyEnv] ? null : "no API key";
 }

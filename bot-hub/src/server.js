@@ -2,14 +2,21 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { ROOT, loadConfig, publicConfig, isMock, isPlan, accountProblem, claudeCodeVersion } from "./config.js";
+import {
+  ROOT, dataDir, loadConfig, publicConfig, isMock, isPlan, accountProblem, claudeCodeVersion,
+} from "./config.js";
 import { callBot, costOf, listPrice } from "./providers.js";
+import {
+  getAdmin, setupOpen, createAdmin, checkCredentials, createSession, verifySession, revokeSession,
+  parseCookies, sessionCookie, COOKIE, loginBlocked, recordLoginFailure, clearLoginFailures,
+} from "./auth.js";
 import { addMessage, getChat, clearChat, recordUsage, summarizeUsage, isDirect } from "./store.js";
 import { estimateSend } from "./estimate.js";
 
 const cfg = loadConfig();
 const PORT = Number(process.env.PORT ?? cfg.port ?? 3000);
-const HOST = process.env.HOST ?? "127.0.0.1";
+// Hosted (PORT provided by the platform) listens on all interfaces; local default is loopback.
+const HOST = process.env.HOST ?? (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
 const botsById = new Map(cfg.bots.map((b) => [b.id, b]));
 
 // A room is "group" or "dm:<botId>" (a private chat with one bot).
@@ -111,6 +118,46 @@ async function readBody(req) {
   return raw ? JSON.parse(raw) : {};
 }
 
+// ---------- auth helpers ----------
+const TRUST_PROXY = process.env.BOTHUB_TRUST_PROXY === "1";
+const clientIp = (req) => {
+  if (TRUST_PROXY) {
+    const xff = String(req.headers["x-forwarded-for"] ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    if (xff.length) return xff[xff.length - 1]; // last hop = the proxy's view of the client
+  }
+  return req.socket.remoteAddress ?? "unknown";
+};
+const isSecure = (req) => req.socket.encrypted || (TRUST_PROXY && req.headers["x-forwarded-proto"] === "https");
+const tokenOf = (req) => parseCookies(req.headers.cookie)[COOKIE];
+const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "same-origin",
+  "Cache-Control": "no-store",
+};
+
+function authPage(res, mode) {
+  const setup = mode === "setup";
+  const envEmail = process.env.BOTHUB_ADMIN_EMAIL;
+  const html = fs
+    .readFileSync(path.join(ROOT, "public", "auth", "auth.html"), "utf8")
+    .replaceAll("__TITLE__", setup ? "Setup" : "Sign in")
+    .replaceAll("__SUB__", setup ? "First-run setup: create the admin account." : "Sign in to continue.")
+    .replaceAll("__BUTTON__", setup ? "Create admin" : "Sign in")
+    .replaceAll("__MODE__", mode)
+    .replaceAll("__PWAC__", setup ? "new-password" : "current-password")
+    .replaceAll("__MINLEN__", setup ? "12" : "1")
+    .replaceAll("__EMAILATTR__", setup && envEmail ? `value="${envEmail.replace(/[^\w@.+-]/g, "")}" readonly` : "")
+    .replaceAll("__EXTRA__", setup && process.env.BOTHUB_SETUP_TOKEN ? '<label>Setup token <input name="token" type="password" required></label>' : "");
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", ...SECURITY_HEADERS });
+  res.end(html);
+}
+
+const AUTH_STATIC = {
+  "/auth/auth.js": "text/javascript; charset=utf-8",
+  "/auth/auth.css": "text/css; charset=utf-8",
+};
+
 const STATIC = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
@@ -120,6 +167,76 @@ const STATIC = {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
   try {
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
+
+    // ----- public routes -----
+    if (url.pathname === "/api/health" || url.pathname === "/health") {
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === "GET" && AUTH_STATIC[url.pathname]) {
+      res.writeHead(200, { "Content-Type": AUTH_STATIC[url.pathname] });
+      return void fs.createReadStream(path.join(ROOT, "public", url.pathname)).pipe(res);
+    }
+
+    // Cross-site writes are refused (cookies are SameSite=Strict as well).
+    if (req.method !== "GET" && req.method !== "HEAD" && req.headers.origin) {
+      let same = false;
+      try { same = new URL(req.headers.origin).host === req.headers.host; } catch {}
+      if (!same) return json(res, 403, { error: "Cross-origin request refused" });
+    }
+
+    const authed = Boolean(verifySession(tokenOf(req)));
+
+    if (url.pathname === "/login" && req.method === "GET") {
+      if (authed) { res.writeHead(302, { Location: "/" }); return void res.end(); }
+      if (setupOpen()) { res.writeHead(302, { Location: "/setup" }); return void res.end(); }
+      return authPage(res, "login");
+    }
+    if (url.pathname === "/setup" && req.method === "GET") {
+      if (!setupOpen()) { res.writeHead(302, { Location: authed ? "/" : "/login" }); return void res.end(); }
+      return authPage(res, "setup");
+    }
+
+    if (url.pathname === "/api/setup" && req.method === "POST") {
+      const body = await readBody(req);
+      const r = createAdmin(body.email, body.password, body.token);
+      if (r.error) return json(res, r.status, { error: r.error });
+      const { token, maxAgeS } = createSession();
+      res.setHeader("Set-Cookie", sessionCookie(token, maxAgeS, isSecure(req)));
+      return json(res, 200, { ok: true });
+    }
+
+    if (url.pathname === "/api/login" && req.method === "POST") {
+      const body = await readBody(req);
+      const ip = clientIp(req);
+      const wait = loginBlocked(ip, body.email);
+      if (wait) {
+        res.setHeader("Retry-After", String(wait));
+        return json(res, 429, { error: "Too many attempts. Try again later." });
+      }
+      if (!checkCredentials(body.email, body.password)) {
+        recordLoginFailure(ip, body.email);
+        return json(res, 401, { error: "Invalid email or password" });
+      }
+      clearLoginFailures(ip, body.email);
+      const { token, maxAgeS } = createSession();
+      res.setHeader("Set-Cookie", sessionCookie(token, maxAgeS, isSecure(req)));
+      return json(res, 200, { ok: true });
+    }
+
+    if (url.pathname === "/api/logout" && req.method === "POST") {
+      revokeSession(tokenOf(req));
+      res.setHeader("Set-Cookie", sessionCookie("", 0, isSecure(req)));
+      return json(res, 200, { ok: true });
+    }
+
+    // ----- everything below needs a session -----
+    if (!authed) {
+      if (url.pathname.startsWith("/api/")) return json(res, 401, { error: "Not signed in" });
+      res.writeHead(302, { Location: setupOpen() ? "/setup" : "/login" });
+      return void res.end();
+    }
+
     if (req.method === "GET" && STATIC[url.pathname]) {
       const [file, type] = STATIC[url.pathname];
       res.writeHead(200, { "Content-Type": type });
@@ -219,6 +336,8 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   const shown = HOST === "0.0.0.0" ? "localhost" : HOST;
   console.log(`Bot Hub running at http://${shown}:${PORT}`);
+  console.log(`Login: ${getAdmin() ? `admin ${getAdmin().source === "env" ? "from env" : "from data dir"}` : "NO ADMIN YET - open /setup to create one"}`);
+  console.log(`Data: ${dataDir()}`);
   console.log(`Config: ${path.relative(ROOT, cfg.file)}${isMock() ? "  (MOCK mode - no API calls)" : ""}`);
   for (const a of cfg.accounts) {
     const problem = accountProblem(a);

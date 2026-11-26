@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to config.json and edit. API keys are NEVER stored here - each account names the environment variable that holds its key. Prices are USD per 1M tokens; check your provider's current pricing page and update them.",
+  "_comment": "Copy to config.json and edit. API keys are NEVER stored here - each account names the environment variable that holds its key. Prices are USD per 1M tokens; check your provider's current pricing page and update them. longContext: when a request's prompt (input + cached input) reaches thresholdTokens, ALL tokens in that request are billed at the longContext rates.",
   "port": 3000,
   "_budgetUSD": "Optional overall project budget in USD. The usage meter warns before a message would go over it. Set to 0 to turn it off.",
   "budgetUSD": 25,
@@ -10,9 +10,15 @@
       "provider": "xai",
       "apiKeyEnv": "XAI_API_KEY_1",
       "pricing": {
-        "inputPerM": 3.0,
-        "outputPerM": 15.0,
-        "cachedInputPerM": 0.75
+        "inputPerM": 2.0,
+        "cachedInputPerM": 0.5,
+        "outputPerM": 6.0,
+        "longContext": {
+          "thresholdTokens": 200000,
+          "inputPerM": 4.0,
+          "cachedInputPerM": 1.0,
+          "outputPerM": 12.0
+        }
       }
     },
     {
@@ -21,9 +27,15 @@
       "provider": "xai",
       "apiKeyEnv": "XAI_API_KEY_2",
       "pricing": {
-        "inputPerM": 3.0,
-        "outputPerM": 15.0,
-        "cachedInputPerM": 0.75
+        "inputPerM": 2.0,
+        "cachedInputPerM": 0.5,
+        "outputPerM": 6.0,
+        "longContext": {
+          "thresholdTokens": 200000,
+          "inputPerM": 4.0,
+          "cachedInputPerM": 1.0,
+          "outputPerM": 12.0
+        }
       }
     },
     {
@@ -44,21 +56,21 @@
       "id": "nova",
       "name": "Nova",
       "account": "grok-1",
-      "model": "grok-4",
+      "model": "grok-4.7",
       "systemPrompt": "You are Nova, an upbeat researcher. Keep replies short and conversational."
     },
     {
       "id": "rook",
       "name": "Rook",
       "account": "grok-2",
-      "model": "grok-4",
+      "model": "grok-4.7",
       "systemPrompt": "You are Rook, a skeptical critic who pokes holes in ideas. Keep replies short."
     },
     {
       "id": "sage",
       "name": "Sage",
       "account": "grok-1",
-      "model": "grok-4",
+      "model": "grok-4.7",
       "systemPrompt": "You are Sage, a calm summarizer who pulls the group toward conclusions. Keep replies short."
     },
     {
