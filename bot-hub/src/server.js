@@ -571,6 +571,15 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
 
+    // Team brief GET: a signed-in session OR an account reply token (same tokens as /api/agent-reply;
+    // ingest tokens do not work). Read-only. PUT stays session-only, below the gate.
+    if (url.pathname === "/api/team-brief" && req.method === "GET") {
+      const m = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ""));
+      if (!authed && !replyRole(m?.[1] ?? "", Boolean(m))) return json(res, 401, { error: "Not signed in" });
+      res.setHeader("Cache-Control", "no-store");
+      return json(res, 200, { text: readTeamBrief() });
+    }
+
     // ----- everything below needs a session -----
     if (!authed) {
       if (url.pathname.startsWith("/api/")) return json(res, 401, { error: "Not signed in" });
@@ -618,11 +627,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { bot: bridgeView().find((b) => b.id === id) });
     }
 
-    // Team brief (session only): shared notes sent to real agents; the hub rule is always line 1.
-    if (url.pathname === "/api/team-brief" && req.method === "GET") {
-      res.setHeader("Cache-Control", "no-store");
-      return json(res, 200, { text: readTeamBrief() });
-    }
+    // Team brief PUT (session only; GET is above the gate): shared notes sent to real agents; the hub rule is always line 1.
     if (url.pathname === "/api/team-brief" && req.method === "PUT") {
       let body;
       try { body = await readBody(req); } catch { return json(res, 400, { error: "Invalid JSON" }); }
