@@ -598,9 +598,10 @@ async function send(text) {
   if (room === "group" && !participants.length) return setStatus("Pick at least one bot (Bots ▾) for the group chat.");
   clearTimeout(estimateTimer);
   const est = await requestEstimate(); // fresh, so it matches exactly what's being sent
-  if (est?.project.budget && est.project.after > est.project.budget) {
-    const ok = confirm(`This send is estimated at ${fmtUSD(est.message.cost)}, which would take the project to about ${fmtUSD(est.project.after)} - over your ${fmtUSD(est.project.budget)} budget. Send anyway?`);
-    if (!ok) return;
+  const over = overPlanLimit(est);
+  if (over.length) {
+    const list = over.map((o) => `${o.name} weekly plan usage to about ${Math.round(o.after)}%`).join(" and ");
+    if (!confirm(`This send would take ${list}, over 100%. Send anyway?`)) return;
   }
   try {
     await api("/api/messages", { method: "POST", body: { room, text, participants, rounds: Number($("#rounds").value) || 1 } });
@@ -687,23 +688,41 @@ async function requestEstimate() {
   }
 }
 
-// Estimated share of the weekly plan this send would use. Grok plan bots only: the rate is
-// calibrated from this week's reported % used against tokens spent on that account.
-function estimatePlanPct(est) {
+// This send's estimated share of each plan account's weekly limit. The rate is calibrated from
+// reported % used against tokens spent on that account. Accounts that can't be calibrated are skipped.
+function planPctByAccount(est) {
   const u = state.usage;
-  if (!est?.message?.calls || !u || state.days !== "7") return null;
-  const byAcct = { "grok-1": "lifteasy", "grok-2": "garrett" };
-  let pct = 0;
+  if (!est?.message?.calls || !u) return [];
+  const byAcct = { "grok-1": { key: "lifteasy", name: "Lifteasy" }, "grok-2": { key: "garrett", name: "garrett" } };
+  const out = new Map();
   for (const r of est.message.perBot ?? []) {
     if (!r.plan) continue;
     const acct = bot(r.bot)?.account;
-    const report = reportFor(u.planUsage, byAcct[acct]);
+    const a = byAcct[acct];
+    if (!a) continue;
+    const used = Number(reportFor(u.planUsage, a.key)?.percentUsed);
     const s = u.byAccount?.[acct];
     const tok = s ? tokensIn(s) + (s.output ?? 0) : 0;
-    if (!report || !(Number(report.percentUsed) > 0) || !(tok > 0)) continue;
-    pct += (Number(report.percentUsed) / tok) * (r.input + r.output);
+    if (!(used > 0) || !(tok > 0)) continue;
+    const e = out.get(acct) ?? { name: a.name, used, add: 0 };
+    e.add += (used / tok) * (r.input + r.output);
+    out.set(acct, e);
   }
+  return [...out.values()];
+}
+
+// Dashboard meter: only meaningful for the 7-day range the calibration is based on.
+function estimatePlanPct(est) {
+  if (state.days !== "7") return null;
+  const pct = planPctByAccount(est).reduce((t, e) => t + e.add, 0);
   return pct > 0 ? pct : null;
+}
+
+// Accounts whose weekly plan usage this send would push past 100%.
+function overPlanLimit(est) {
+  return planPctByAccount(est)
+    .map((e) => ({ name: e.name, after: e.used + e.add }))
+    .filter((e) => e.after > 100);
 }
 
 function renderMeter() {

@@ -85,3 +85,34 @@ test("GET/PUT /api/team-brief: 401 signed out; PUT keeps the rule; GET reflects"
     assert.ok(!s.output().includes("Only my notes"), "brief body must not be logged");
   } finally { await s.stop(); }
 });
+
+test("GET /api/team-brief with an account reply token; PUT stays session-only", async () => {
+  const LIFT = "lifteasy-reply-token-for-brief-test";
+  const s = await startServer({ ...env, BOTHUB_REPLY_TOKEN: LIFT });
+  try {
+    const bearer = (t) => ({ headers: { Authorization: `Bearer ${t}` } });
+    assert.equal((await fetch(s.base + "/api/team-brief", bearer("wrong-token"))).status, 401);
+
+    const lift = await fetch(s.base + "/api/team-brief", bearer(LIFT));
+    assert.equal(lift.status, 200);
+    assert.equal(lift.headers.get("cache-control"), "no-store");
+    const liftBody = await lift.json();
+    assert.equal(liftBody.text.split("\n")[0], RULE);
+
+    const login = await postJson(s.base + "/api/login", { email: EMAIL, password: PASSWORD });
+    const h = { Cookie: (login.headers.get("set-cookie") ?? "").split(";")[0] };
+    const garrett = (await (await postJson(s.base + "/api/reply-tokens/garrett/reveal", {}, h)).json()).token;
+    const g = await fetch(s.base + "/api/team-brief", bearer(garrett));
+    assert.equal(g.status, 200);
+    assert.deepEqual(await g.json(), liftBody);
+    const sess = await (await fetch(s.base + "/api/team-brief", { headers: h })).json();
+    assert.deepEqual(sess, liftBody);
+
+    for (const t of [LIFT, garrett]) {
+      const put = await fetch(s.base + "/api/team-brief", { method: "PUT", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ text: "nope" }) });
+      assert.equal(put.status, 401);
+    }
+    assert.ok(!fs.readFileSync(path.join(s.dataDir, "team-brief.txt"), "utf8").includes("nope"));
+    assert.ok(!s.output().includes(LIFT) && !s.output().includes(garrett), "tokens must not be logged");
+  } finally { await s.stop(); }
+});

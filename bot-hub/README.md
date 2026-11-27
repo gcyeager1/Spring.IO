@@ -31,7 +31,7 @@ Run the tests (mock mode, temp data dir, no network or keys): `npm test`.
    - Grok models default to `grok-4.7`; pricing is USD per 1M tokens: $2.00 input / $0.50 cached input / $6.00 output.
    - **Long context:** when a request's prompt (input + cached input) is 200k tokens or more, xAI bills *all* tokens of that request at $4.00 / $1.00 / $12.00. This is the `pricing.longContext` block, used by `costOf` in `src/providers.js`.
    - Claude (`claude-opus-5-5`): $4 input / $20 output / $0.20 cache read / $5 cache write (5-minute).
-   - **budgetUSD:** optional overall budget. The meter shows how much of it you've used, warns at 90%, and asks you to confirm before a send that would go over. Set it to 0 to turn the budget off.
+   - **budgetUSD:** optional overall budget, no longer used for the send confirm. The hub asks you to confirm only before a send that would take a plan account's weekly usage over 100%.
    - **pricing:** USD per 1M tokens, used for the cost estimates. **Check the Grok prices and model names against xAI's current pricing page.** The defaults are placeholders.
 3. Claude needs no API key: set it up on your subscription (see "Claude on your subscription" below).
 4. Set the Grok keys and start:
