@@ -617,6 +617,25 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { text: readTeamBrief() });
     }
 
+    // Messages GET: a signed-in session OR an account reply token whose account has a bot in
+    // agentPosters (lifteasy -> grok-1, garrett -> grok-2; ingest tokens do not work). Read-only.
+    // POST and DELETE /api/messages stay session-only, below the gate.
+    if (url.pathname === "/api/messages" && req.method === "GET") {
+      if (!authed) {
+        const m = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ""));
+        const role = replyRole(m?.[1] ?? "", Boolean(m));
+        if (!role) return json(res, 401, { error: "Not signed in" });
+        const account = role === "garrett" ? "grok-2" : "grok-1";
+        if (!cfg.agentPosters.some((id) => botsById.get(id)?.account === account)) {
+          return json(res, 403, { error: "Token not valid for reading messages" });
+        }
+      }
+      const room = url.searchParams.get("room");
+      if (room && !validRoom(room)) return json(res, 400, { error: "Unknown room" });
+      res.setHeader("Cache-Control", "no-store");
+      return json(res, 200, getChat(room ?? undefined));
+    }
+
     // ----- everything below needs a session -----
     if (!authed) {
       if (url.pathname.startsWith("/api/")) return json(res, 401, { error: "Not signed in" });
@@ -723,11 +742,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/messages") {
-      if (req.method === "GET") {
-        const room = url.searchParams.get("room");
-        if (room && !validRoom(room)) return json(res, 400, { error: "Unknown room" });
-        return json(res, 200, getChat(room ?? undefined));
-      }
+      // GET is handled above the gate (session or reply token); DELETE and POST need a session.
       if (req.method === "DELETE") {
         const room = url.searchParams.get("room") ?? "group";
         if (!validRoom(room)) return json(res, 400, { error: "Unknown room" });
