@@ -198,3 +198,14 @@ With an API key (`anthropic` provider), Claude uses `claude-opus-5-5` at `low` e
 | `PORT` | `3000` | Port to listen on |
 | `HOST` | `127.0.0.1` | Set to `0.0.0.0` to reach it from other devices on your network. Login is required; still keep this on a trusted network if you expose it that way. |
 | `BOT_HUB_MOCK` | unset | `1` returns fake replies and fake usage |
+
+## Embedding in EZ CRM (frame allowlist + SSO)
+
+Responses send `Content-Security-Policy: frame-ancestors ...` instead of `X-Frame-Options: DENY`. Always allowed: `'self'`, `https://crm.ezliftgaragedoorservice.com`, `https://ez-lift-crm-production.up.railway.app`, `http://127.0.0.1:4721`, `http://localhost:4721`.
+
+| Env var | Purpose |
+|---|---|
+| `BOTHUB_FRAME_ANCESTORS` | Optional comma-separated extra origins. Only `https://` origins (or `http://127.0.0.1:*` / `http://localhost:*`) are accepted; anything else is ignored. |
+| `BOTHUB_CRM_SSO_SECRET` | Long random shared secret (treat like a password; never commit). Unset = SSO disabled (mint returns 503, `/sso` never creates a session). |
+
+The CRM server calls `POST /api/sso/ticket` with `Authorization: Bearer <secret>` (optional JSON `{ email, name, source }`) and gets `{ ok, embedUrl, expiresIn: 60 }`. The browser/WebView loads `embedUrl` (`/sso?ticket=...&embed=1`): the single-use, 60 s ticket becomes a normal `bothub_session` cookie (SameSite=Lax) and redirects to `/?embed=1`. Mint is limited to 30/hour/IP. A bad, used or expired ticket redirects to `/login`.

@@ -1,3 +1,4 @@
+import { cspHeader, ssoSecretOk, createTicket, consumeTicket } from "./sso.js";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -326,11 +327,23 @@ function selfRegisterHit(ip) {
   if (selfRegHits.size > 5000) for (const [k, v] of selfRegHits) if (!v.some((t) => now - t < SELF_REG_WINDOW)) selfRegHits.delete(k);
   return 0;
 }
+// SSO mint: 30 requests per rolling hour per IP.
+const SSO_MAX = 30, SSO_WINDOW = 3600_000;
+const ssoHits = new Map();
+function ssoMintHit(ip) {
+  const now = Date.now();
+  const arr = (ssoHits.get(ip) ?? []).filter((t) => now - t < SSO_WINDOW);
+  if (arr.length >= SSO_MAX) { ssoHits.set(ip, arr); return Math.max(1, Math.ceil((arr[0] + SSO_WINDOW - now) / 1000)); }
+  arr.push(now);
+  ssoHits.set(ip, arr);
+  if (ssoHits.size > 5000) for (const [k, v] of ssoHits) if (!v.some((t) => now - t < SSO_WINDOW)) ssoHits.delete(k);
+  return 0;
+}
 const isSecure = (req) => req.socket.encrypted || (TRUST_PROXY && req.headers["x-forwarded-proto"] === "https");
 const tokenOf = (req) => parseCookies(req.headers.cookie)[COOKIE];
 const SECURITY_HEADERS = {
   "X-Content-Type-Options": "nosniff",
-  "X-Frame-Options": "DENY",
+  "Content-Security-Policy": cspHeader(), // frame-ancestors allowlist (no X-Frame-Options: DENY would block the CRM)
   "Referrer-Policy": "same-origin",
   "Cache-Control": "no-store",
 };
@@ -422,6 +435,30 @@ const server = http.createServer(async (req, res) => {
       savePlanUsage(v.report);
       broadcast("usage", {});
       return json(res, 200, { ok: true });
+    }
+    // CRM SSO: server-to-server mint (bearer = BOTHUB_CRM_SSO_SECRET), then the browser trades the ticket at /sso.
+    if (url.pathname === "/api/sso/ticket" && req.method === "POST") {
+      const wait = ssoMintHit(clientIp(req));
+      if (wait) { res.setHeader("Retry-After", String(wait)); return json(res, 429, { error: "Too many requests" }); }
+      if (!process.env.BOTHUB_CRM_SSO_SECRET) return json(res, 503, { error: "SSO is not configured" });
+      if (!ssoSecretOk(req)) return json(res, 401, { error: "Unauthorized" });
+      let body = {};
+      try { body = await readBody(req); } catch { return json(res, 400, { error: "Invalid JSON" }); }
+      const ticket = createTicket(body && typeof body === "object" ? body : {});
+      const proto = TRUST_PROXY && req.headers["x-forwarded-proto"] ? String(req.headers["x-forwarded-proto"]).split(",")[0].trim() : "http";
+      const origin = `${proto}://${req.headers.host ?? `${HOST}:${PORT}`}`;
+      console.log("sso ticket minted");
+      return json(res, 200, { ok: true, embedUrl: `${origin}/sso?ticket=${encodeURIComponent(ticket)}&embed=1`, expiresIn: 60 });
+    }
+    if (url.pathname === "/sso" && req.method === "GET") {
+      if (!process.env.BOTHUB_CRM_SSO_SECRET || !consumeTicket(url.searchParams.get("ticket"))) {
+        res.writeHead(302, { Location: "/login" });
+        return void res.end();
+      }
+      const { token, maxAgeS } = createSession();
+      res.setHeader("Set-Cookie", sessionCookie(token, maxAgeS, isSecure(req)));
+      res.writeHead(302, { Location: "/?embed=1" });
+      return void res.end();
     }
     // Self-register: a bot on its own box sets/clears its webhook with its account reply token.
     // Bearer only (a session cookie alone is not enough). Order: rate limit, auth, account, body, store.

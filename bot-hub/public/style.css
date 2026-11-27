@@ -301,3 +301,7 @@ td.err { color: var(--danger); }
 .claude-label { font-size: var(--t-small); font-weight: 500; }
 .bridge-row { margin: var(--s3) 0; }
 .bridge-row input { width: 100%; font-family: ui-monospace, Menlo, monospace; margin: var(--s1) 0; }
+
+/* Embedded in the CRM: slimmer top bar, every control stays available. */
+html.embed .topbar { min-height: 44px; padding-left: var(--s3); }
+html.embed .topbar .app-name { display: none; }

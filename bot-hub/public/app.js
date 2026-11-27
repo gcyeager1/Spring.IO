@@ -2,6 +2,9 @@
 // private chats with each bot and a usage details page.
 // No build step, no dependencies. Charts are hand-built SVG.
 
+// Embedded in the CRM (?embed=1): tighten the top bar via CSS only; nothing is hidden.
+if (/(^|[?&])embed=1(&|$)/.test(location.search)) document.documentElement.classList.add("embed");
+
 import { fmtShare, fmtPercentUsed, fmtResetEastern, fmtAgo as fmtReportAgo, isLeftoverBucket, reportFor, poolSlices, pieSvg, sliceColor, fmtPoolShare, EMPTY_PLAN_TEXT, claudeWindows, claudeSlices, fmtResetIn } from "/planusage.js";
 
 const $ = (sel) => document.querySelector(sel);
